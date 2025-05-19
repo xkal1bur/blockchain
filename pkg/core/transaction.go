@@ -1,15 +1,16 @@
 package core
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"path/filepath"
 	"net/http"
 	"os"
-	"bytes"
-	"crypto/sha256"
+	"path/filepath"
+
+	"github.com/xkal1bur/blockchain/pkg/crypto"
 )
 
 func DecodeInt(r io.Reader, nbytes int) (uint64, error) {
@@ -20,10 +21,10 @@ func DecodeInt(r io.Reader, nbytes int) (uint64, error) {
 	return binary.LittleEndian.Uint64(append(buf, make([]byte, 8-nbytes)...)), nil
 }
 
-func EncodeInt(i uint64, nbytes int) ([]byte, error) {
+func EncodeInt(i uint64, nbytes int) []byte {
 	buf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(buf, i)
-	return buf[:nbytes], nil
+	return buf[:nbytes]
 }
 
 func DecodeVarInt(r io.Reader) (uint64, error) {
@@ -31,7 +32,6 @@ func DecodeVarInt(r io.Reader) (uint64, error) {
 	if _, err := r.Read(prefix); err != nil {
 		return 0, err
 	}
-
 	switch prefix[0] {
 	case 0xfd:
 		return DecodeInt(r, 2)
@@ -44,50 +44,55 @@ func DecodeVarInt(r io.Reader) (uint64, error) {
 	}
 }
 
-func EncodeVarInt(i uint64) ([]byte, error) {
+func EncodeVarInt(i uint64) []byte {
 	switch {
 	case i <= 0xfc:
-		return []byte{byte(i)}, nil
+		return []byte{byte(i)}
 	case i <= 0xffff:
-		val, _ := EncodeInt(i, 2)
-		return append([]byte{0xfd}, val...), nil
+		val := EncodeInt(i, 2)
+		return append([]byte{0xfd}, val...)
 	case i <= 0xffffffff:
-		val, _ := EncodeInt(i, 4)
-		return append([]byte{0xfe}, val...), nil
+		val := EncodeInt(i, 4)
+		return append([]byte{0xfe}, val...)
 	case i <= 0xffffffffffffffff:
-		val, _ := EncodeInt(i, 8)
-		return append([]byte{0xff}, val...), nil
+		val := EncodeInt(i, 8)
+		return append([]byte{0xff}, val...)
 	default:
-		return nil, fmt.Errorf("integer too large: %d", i)
+		return nil
 	}
 }
 
 // ------------------------------------------------------
 
-type TxFetcher struct { CacheDir string }
+type TxFetcher struct{ CacheDir string }
 type Tx struct {
-	Version      uint32
-	TxIns        []TxIn
-	TxOuts       []TxOut
-	Locktimei    uint32
+	Version   uint32
+	TxIns     []TxIn
+	TxOuts    []TxOut
+	Locktimei uint32
 }
 type TxIn struct {
-	PrevTx       []byte
-	PrevIndex    uint32
-	ScriptSig    *Script
-	Sequence     uint32
-	Witness      [][]byte
-	Net 	     string
+	PrevTx    []byte
+	PrevIndex uint32
+	ScriptSig *Script
+	Sequence  uint32
+	Witness   [][]byte
+	Net       string
 }
 type TxOut struct {
 	Amount       uint64
 	ScriptPubKey *Script
 }
 
-// TxFetcher
-func NewTxFetcher() *TxFetcher { return &TxFetcher{CacheDir : "txdb"} }
+// Script represents a Bitcoin script
+type Script struct {
+	Data []byte
+}
 
-func (f *TxFetcher) Fetch(txid string, net string) (*Tx, error){
+// TxFetcher
+func NewTxFetcher() *TxFetcher { return &TxFetcher{CacheDir: "txdb"} }
+
+func (f *TxFetcher) Fetch(txid string, net string) (*Tx, error) {
 	txid = string(bytes.ToLower([]byte(txid)))
 	cachePath := filepath.Join(f.CacheDir, txid)
 	var raw []byte
@@ -126,7 +131,7 @@ func (f *TxFetcher) Fetch(txid string, net string) (*Tx, error){
 func DecodeTx(s io.Reader) (*Tx, error) {
 	var tx Tx
 	var err error
-	
+
 	version, err := DecodeInt(s, 4)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read version: %v", err)
@@ -138,7 +143,6 @@ func DecodeTx(s io.Reader) (*Tx, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read number of inputs: %v", err)
 	}
-	
 	if num_inputs == 0 {
 		segwit = true
 		num_inputs, err = DecodeVarInt(s)
@@ -159,7 +163,6 @@ func DecodeTx(s io.Reader) (*Tx, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read number of outputs: %v", err)
 	}
-
 	tx.TxOuts = make([]TxOut, num_outputs)
 	for i := range tx.TxOuts {
 		tx.TxOuts[i], err = DecodeTxOut(s)
@@ -202,13 +205,12 @@ func DecodeTx(s io.Reader) (*Tx, error) {
 
 func (tx *Tx) ID() string {
 	raw := tx.Encode(true, -1)
-	hash := sha256.Sum256(raw)
-	hash2 := sha256.Sum256(hash[:])
+	hash := crypto.Sha256Edu(raw)
+	hash2 := crypto.Sha256Edu(hash[:])
 	reversed := reverseBytes(hash2[:])
 	return hex.EncodeToString(reversed)
 }
 
-// TESTING
 func reverseBytes(b []byte) []byte {
 	n := len(b)
 	out := make([]byte, n)
@@ -218,12 +220,10 @@ func reverseBytes(b []byte) []byte {
 	return out
 }
 
-
 func DecodeTxIn(s io.Reader) (TxIn, error) {
 	var txin TxIn
 	var err error
 
-	// Read previous transaction ID (32 bytes)
 	prevTx := make([]byte, 32)
 	if _, err := io.ReadFull(s, prevTx); err != nil {
 		return TxIn{}, fmt.Errorf("failed to read prev tx: %v", err)
@@ -231,14 +231,12 @@ func DecodeTxIn(s io.Reader) (TxIn, error) {
 	// Reverse the bytes since transaction IDs are stored in little-endian
 	txin.PrevTx = reverseBytes(prevTx)
 
-	// Read previous output index (4 bytes)
 	prevIndex, err := DecodeInt(s, 4)
 	if err != nil {
 		return TxIn{}, fmt.Errorf("failed to read prev index: %v", err)
 	}
 	txin.PrevIndex = uint32(prevIndex)
 
-	// Read script length and script
 	scriptLen, err := DecodeVarInt(s)
 	if err != nil {
 		return TxIn{}, fmt.Errorf("failed to read script length: %v", err)
@@ -249,7 +247,6 @@ func DecodeTxIn(s io.Reader) (TxIn, error) {
 	}
 	txin.ScriptSig = &Script{Data: script}
 
-	// Read sequence (4 bytes)
 	sequence, err := DecodeInt(s, 4)
 	if err != nil {
 		return TxIn{}, fmt.Errorf("failed to read sequence: %v", err)
@@ -263,14 +260,12 @@ func DecodeTxOut(s io.Reader) (TxOut, error) {
 	var txout TxOut
 	var err error
 
-	// Read amount (8 bytes)
 	amount, err := DecodeInt(s, 8)
 	if err != nil {
 		return TxOut{}, fmt.Errorf("failed to read amount: %v", err)
 	}
 	txout.Amount = amount
 
-	// Read script length and script
 	scriptLen, err := DecodeVarInt(s)
 	if err != nil {
 		return TxOut{}, fmt.Errorf("failed to read script length: %v", err)
@@ -284,83 +279,114 @@ func DecodeTxOut(s io.Reader) (TxOut, error) {
 	return txout, nil
 }
 
-// Script represents a Bitcoin script
-type Script struct {
-	Data []byte
-}
+// vibe coded D:
 
-func (tx *Tx) Encode(segwit bool, witness_index int) []byte {
+func (tx *Tx) Encode(force_legacy bool, sig_index int) []byte {
 	var out []byte
 
-	// Version (4 bytes)
-	version, _ := EncodeInt(uint64(tx.Version), 4)
+	// encode metadata
+	version := EncodeInt(uint64(tx.Version), 4)
 	out = append(out, version...)
 
-	// Input count and inputs
-	if segwit {
-		out = append(out, 0x00) // marker
-		out = append(out, 0x01) // flag
+	// Check if this is a segwit transaction
+	segwit := len(tx.TxIns) > 0 && len(tx.TxIns[0].Witness) > 0
+	if segwit && !force_legacy {
+		out = append(out, 0x00, 0x01) // segwit marker + flag bytes
 	}
-	
-	num_inputs, _ := EncodeVarInt(uint64(len(tx.TxIns)))
+
+	// encode inputs
+	num_inputs := EncodeVarInt(uint64(len(tx.TxIns)))
 	out = append(out, num_inputs...)
 
-	for _, txin := range tx.TxIns {
-		// Previous transaction ID (32 bytes)
-		out = append(out, txin.PrevTx...)
-		
-		// Previous output index (4 bytes)
-		prevIndex, _ := EncodeInt(uint64(txin.PrevIndex), 4)
-		out = append(out, prevIndex...)
-		
-		// Script length and script
-		scriptLen, _ := EncodeVarInt(uint64(len(txin.ScriptSig.Data)))
-		out = append(out, scriptLen...)
-		out = append(out, txin.ScriptSig.Data...)
-		
-		// Sequence (4 bytes)
-		sequence, _ := EncodeInt(uint64(txin.Sequence), 4)
-		out = append(out, sequence...)
-	}
-
-	// Output count and outputs
-	num_outputs, _ := EncodeVarInt(uint64(len(tx.TxOuts)))
-	out = append(out, num_outputs...)
-
-	for _, txout := range tx.TxOuts {
-		// Amount (8 bytes)
-		amount, _ := EncodeInt(txout.Amount, 8)
-		out = append(out, amount...)
-		
-		// Script length and script
-		scriptLen, _ := EncodeVarInt(uint64(len(txout.ScriptPubKey.Data)))
-		out = append(out, scriptLen...)
-		out = append(out, txout.ScriptPubKey.Data...)
-	}
-
-	// Witness data if segwit
-	if segwit {
+	if sig_index == -1 {
+		// encode all inputs normally
+		for _, txin := range tx.TxIns {
+			out = append(out, txin.Encode(false)...)
+		}
+	} else {
+		// encode inputs with script override for the signing input
 		for i, txin := range tx.TxIns {
-			if i == witness_index {
-				// Write witness data for this input
-				num_witness, _ := EncodeVarInt(uint64(len(txin.Witness)))
-				out = append(out, num_witness...)
-				for _, witness_item := range txin.Witness {
-					witness_len, _ := EncodeVarInt(uint64(len(witness_item)))
+			out = append(out, txin.Encode(i == sig_index)...)
+		}
+	}
+
+	// encode outputs
+	num_outputs := EncodeVarInt(uint64(len(tx.TxOuts)))
+	out = append(out, num_outputs...)
+	for _, txout := range tx.TxOuts {
+		out = append(out, txout.Encode()...)
+	}
+
+	// encode witnesses
+	if segwit && !force_legacy {
+		for _, txin := range tx.TxIns {
+			num_witness := EncodeVarInt(uint64(len(txin.Witness)))
+			out = append(out, num_witness...)
+			for _, item := range txin.Witness {
+				if len(item) == 0 {
+					// Empty witness item
+					out = append(out, 0x00)
+				} else {
+					witness_len := EncodeVarInt(uint64(len(item)))
 					out = append(out, witness_len...)
-					out = append(out, witness_item...)
+					out = append(out, item...)
 				}
-			} else {
-				// Empty witness for other inputs
-				out = append(out, 0x00)
 			}
 		}
 	}
 
-	// Locktime (4 bytes)
-	locktime, _ := EncodeInt(uint64(tx.Locktimei), 4)
+	// encode locktime
+	locktime := EncodeInt(uint64(tx.Locktimei), 4)
 	out = append(out, locktime...)
+
+	// Add SIGHASH_ALL if this is for signing
+	if sig_index != -1 {
+		sighash := EncodeInt(1, 4) // 1 = SIGHASH_ALL
+		out = append(out, sighash...)
+	}
 
 	return out
 }
 
+// Add Encode methods for TxIn and TxOut
+func (txin *TxIn) Encode(script_override bool) []byte {
+	var out []byte
+
+	// Previous transaction ID (32 bytes)
+	out = append(out, txin.PrevTx...)
+
+	// Previous output index (4 bytes)
+	prevIndex := EncodeInt(uint64(txin.PrevIndex), 4)
+	out = append(out, prevIndex...)
+
+	// Script
+	if script_override {
+		// Empty script for signing
+		out = append(out, 0x00)
+	} else {
+		scriptLen := EncodeVarInt(uint64(len(txin.ScriptSig.Data)))
+		out = append(out, scriptLen...)
+		out = append(out, txin.ScriptSig.Data...)
+	}
+
+	// Sequence (4 bytes)
+	sequence := EncodeInt(uint64(txin.Sequence), 4)
+	out = append(out, sequence...)
+
+	return out
+}
+
+func (txout *TxOut) Encode() []byte {
+	var out []byte
+
+	// Amount (8 bytes)
+	amount := EncodeInt(txout.Amount, 8)
+	out = append(out, amount...)
+
+	// Script length and script
+	scriptLen := EncodeVarInt(uint64(len(txout.ScriptPubKey.Data)))
+	out = append(out, scriptLen...)
+	out = append(out, txout.ScriptPubKey.Data...)
+
+	return out
+}

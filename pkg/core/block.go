@@ -27,25 +27,16 @@ La estructura pensada es:
 func EncodeBlock(b *Block) ([]byte, error) {
 	buf := new(bytes.Buffer)
 	// Encode the version
-	version, err := EncodeInt(b.Version, 4)
-	if err != nil {
-		return nil, err
-	}
+	version := EncodeInt(b.Version, 4)
 
 	prevBlock := b.PrevBlock
 	merkleRoot := b.MerkleRoot
 
 	// Encode the timestamp
-	timestamp, err := EncodeInt(b.Timestamp, 4)
-	if err != nil {
-		return nil, err
-	}
+	timestamp := EncodeInt(b.Timestamp, 4)
 
 	// Encode the nonce
-	nonce, err := EncodeInt(b.Nonce, 4)
-	if err != nil {
-		return nil, err
-	}
+	nonce := EncodeInt(b.Nonce, 4)
 
 	// Write to buffer
 	buf.Write(version)
