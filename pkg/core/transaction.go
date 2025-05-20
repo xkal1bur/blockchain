@@ -279,6 +279,12 @@ func DecodeTxOut(s io.Reader) (TxOut, error) {
 	return txout, nil
 }
 
+// Idk if this is it works xd
+
+func DecodeTxBytes(data []byte) (*Tx, error) {
+	return DecodeTx(bytes.NewReader(data))
+}
+
 // vibe coded D:
 
 func (tx *Tx) Encode(force_legacy bool, sig_index int) []byte {
