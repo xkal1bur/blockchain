@@ -1,101 +1,42 @@
 package core
 
 import (
-	"bytes"
+	"encoding/json"
+	"fmt"
+	"math/big"
+
+	"github.com/xkal1bur/blockchain/pkg/crypto"
 )
 
 type Block struct {
-	Version    uint64
-	PrevBlock  []byte // 32 bytes, ojalá
-	MerkleRoot []byte // 32 bytes, ojalá
-	Timestamp  uint64
-	Nonce      uint64
-	// maybe difficulty?
+	Version      uint64 `json:"version"`
+	PrevBlock    []byte `json:"prev_block"` // 32 bytes, ojalá
+	Timestamp    uint64 `json:"timestamp"`
+	Nonce        uint64 `json:"nonce"`
+	Bits         uint64 `json:"bits"`         //  difficulty?
+	Transactions []Tx   `json:"transactions"` // Transactions in the block
 }
 
-/*
-Encoding: block -> bytes
--------------------------
-La estructura pensada es:
-- Version: 		4 bytes
-- PrevBlock: 	32 bytes
-- MerkleRoot: 	32 bytes
-- Timestamp: 	4 bytes
-- Nonce: 		4 bytes
-*/
-
-func EncodeBlock(b *Block) ([]byte, error) {
-	buf := new(bytes.Buffer)
-	// Encode the version
-	version := EncodeInt(b.Version, 4)
-
-	prevBlock := b.PrevBlock
-	merkleRoot := b.MerkleRoot
-
-	// Encode the timestamp
-	timestamp := EncodeInt(b.Timestamp, 4)
-
-	// Encode the nonce
-	nonce := EncodeInt(b.Nonce, 4)
-
-	// Write to buffer
-	buf.Write(version)
-	buf.Write(prevBlock)
-	buf.Write(merkleRoot)
-	buf.Write(timestamp)
-	buf.Write(nonce)
-
-	// Return the encoded bytes :3
-	return buf.Bytes(), nil
+// Get block ID
+func (b *Block) Hash() ([]byte, error) {
+	blockBytes, err := json.Marshal(b)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to serialize (marshal) block: %v", err)
+	}
+	return crypto.Sha3_256(blockBytes), nil
 }
 
-func DecodeBlock(encodedBlock []byte) (*Block, error) {
-	buf := bytes.NewReader(encodedBlock)
-
-	// Decode the version
-	version, err := DecodeInt(buf, 4)
+// Validate the block's hash against its difficulty target
+func (b *Block) ValidateBlock() bool {
+	hash, err := b.Hash()
 	if err != nil {
-		return nil, err
+		fmt.Println("Error calculating block hash:", err)
+		return false
 	}
+	hashInt := new(big.Int).SetBytes(hash)
+	target := new(big.Int).SetUint64(b.Bits)
+	return hashInt.Cmp(target) == -1
 
-	// Decode the PrevBlock
-	prevBlock := make([]byte, 32)
-	_, err = buf.Read(prevBlock)
-	if err != nil {
-		return nil, err
-	}
-
-	// Decode the MerkleRoot
-	merkleRoot := make([]byte, 32)
-	_, err = buf.Read(merkleRoot)
-	if err != nil {
-		return nil, err
-	}
-
-	// Decode the timestamp
-	timestamp, err := DecodeInt(buf, 4)
-	if err != nil {
-		return nil, err
-	}
-
-	// Decode the nonce
-	nonce, err := DecodeInt(buf, 4)
-	if err != nil {
-		return nil, err
-	}
-
-	block := &Block{
-		Version:    version,
-		PrevBlock:  prevBlock,
-		MerkleRoot: merkleRoot,
-		Timestamp:  timestamp,
-		Nonce:      nonce,
-	}
-
-	return block, nil
 }
 
-func ValidateBlock(b *Block) bool {
-	// will depend on PoW or PoS
-	return true
-}
+// ToDo: Append block to a blockchain file . How to store its hash?
