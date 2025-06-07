@@ -2,65 +2,18 @@ package core
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
-	"path/filepath"
+	"math/big"
 
-	"github.com/xkal1bur/blockchain/pkg/crypto"
+	"golang.org/x/crypto/sha3"
 )
 
-func DecodeInt(r io.Reader, nbytes int) (uint64, error) {
-	buf := make([]byte, nbytes)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return 0, err
-	}
-	return binary.LittleEndian.Uint64(append(buf, make([]byte, 8-nbytes)...)), nil
-}
-
-func EncodeInt(i uint64, nbytes int) []byte {
-	buf := make([]byte, 8)
-	binary.LittleEndian.PutUint64(buf, i)
-	return buf[:nbytes]
-}
-
-func DecodeVarInt(r io.Reader) (uint64, error) {
-	prefix := make([]byte, 1)
-	if _, err := r.Read(prefix); err != nil {
-		return 0, err
-	}
-	switch prefix[0] {
-	case 0xfd:
-		return DecodeInt(r, 2)
-	case 0xfe:
-		return DecodeInt(r, 4)
-	case 0xff:
-		return DecodeInt(r, 8)
-	default:
-		return uint64(prefix[0]), nil
-	}
-}
-
-func EncodeVarInt(i uint64) []byte {
-	switch {
-	case i <= 0xfc:
-		return []byte{byte(i)}
-	case i <= 0xffff:
-		val := EncodeInt(i, 2)
-		return append([]byte{0xfd}, val...)
-	case i <= 0xffffffff:
-		val := EncodeInt(i, 4)
-		return append([]byte{0xfe}, val...)
-	case i <= 0xffffffffffffffff:
-		val := EncodeInt(i, 8)
-		return append([]byte{0xff}, val...)
-	default:
-		return nil
-	}
-}
+// Standard curve for all blockchain operations
+var StandardCurve = elliptic.P256()
 
 // ------------------------------------------------------
 
@@ -74,325 +27,156 @@ type Tx struct {
 type TxIn struct {
 	PrevTx    []byte
 	PrevIndex uint32
-	ScriptSig *Script
-	Sequence  uint32
-	Witness   [][]byte
+	Signature []byte
 	Net       string
 }
 type TxOut struct {
-	Amount       uint64
-	ScriptPubKey *Script
-}
-
-// Script represents a Bitcoin script
-type Script struct {
-	Data []byte
-}
-
-// TxFetcher
-func NewTxFetcher() *TxFetcher { return &TxFetcher{CacheDir: "txdb"} }
-
-func (f *TxFetcher) Fetch(txid string, net string) (*Tx, error) {
-	txid = string(bytes.ToLower([]byte(txid)))
-	cachePath := filepath.Join(f.CacheDir, txid)
-	var raw []byte
-	var err error
-	if _, err = os.Stat(cachePath); err == nil {
-		raw, err = os.ReadFile(cachePath)
-	} else {
-		var url string
-		switch net {
-		case "main":
-			url = fmt.Sprintf("https://blockstream.info/api/tx/%s/hex", txid)
-		case "test":
-			url = fmt.Sprintf("https://blockstream.info/testnet/api/tx/%s/hex", txid)
-		}
-		resp, _ := http.Get(url)
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return nil, fmt.Errorf("txid %s not found", txid)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		raw, err = hex.DecodeString(string(bytes.TrimSpace(body)))
-		os.MkdirAll(f.CacheDir, 0755)
-		os.WriteFile(cachePath, raw, 0644)
-	}
-	tx, err := DecodeTx(bytes.NewReader(raw))
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode transaction: %v", err)
-	}
-	if tx.ID() != txid {
-		return nil, fmt.Errorf("decoded transaction id mismatch")
-	}
-	return tx, nil
-}
-
-// Transaction
-func DecodeTx(s io.Reader) (*Tx, error) {
-	var tx Tx
-	var err error
-
-	version, err := DecodeInt(s, 4)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read version: %v", err)
-	}
-	tx.Version = uint32(version)
-
-	segwit := false
-	num_inputs, err := DecodeVarInt(s)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read number of inputs: %v", err)
-	}
-	if num_inputs == 0 {
-		segwit = true
-		num_inputs, err = DecodeVarInt(s)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read number of inputs (segwit): %v", err)
-		}
-	}
-
-	tx.TxIns = make([]TxIn, num_inputs)
-	for i := range tx.TxIns {
-		tx.TxIns[i], err = DecodeTxIn(s)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode input %d: %v", i, err)
-		}
-	}
-
-	num_outputs, err := DecodeVarInt(s)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read number of outputs: %v", err)
-	}
-	tx.TxOuts = make([]TxOut, num_outputs)
-	for i := range tx.TxOuts {
-		tx.TxOuts[i], err = DecodeTxOut(s)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode output %d: %v", i, err)
-		}
-	}
-
-	if segwit {
-		for i := range tx.TxIns {
-			num_witness, err := DecodeVarInt(s)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read number of witness items: %v", err)
-			}
-			tx.TxIns[i].Witness = make([][]byte, num_witness)
-			for j := range tx.TxIns[i].Witness {
-				witness_item, err := DecodeVarInt(s)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read witness item %d for input %d: %v", j, i, err)
-				}
-				if witness_item == 0 {
-					tx.TxIns[i].Witness[j] = []byte{}
-				} else {
-					tx.TxIns[i].Witness[j] = make([]byte, witness_item)
-					if _, err := io.ReadFull(s, tx.TxIns[i].Witness[j]); err != nil {
-						return nil, fmt.Errorf("failed to read witness item %d for input %d: %v", j, i, err)
-					}
-				}
-			}
-		}
-	}
-
-	locktime, err := DecodeInt(s, 4)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read locktime: %v", err)
-	}
-	tx.Locktimei = uint32(locktime)
-	return &tx, nil
+	Amount        uint64
+	LockingScript []byte
 }
 
 func (tx *Tx) ID() string {
-	raw := tx.Encode(true, -1)
-	hash := crypto.Sha256Edu(raw)
-	hash2 := crypto.Sha256Edu(hash[:])
-	reversed := reverseBytes(hash2[:])
-	return hex.EncodeToString(reversed)
+	// Serialize the transaction data
+	var buf bytes.Buffer
+
+	// Write version
+	binary.Write(&buf, binary.LittleEndian, tx.Version)
+
+	// Write number of inputs
+	binary.Write(&buf, binary.LittleEndian, uint32(len(tx.TxIns)))
+
+	// Write each input
+	for _, txIn := range tx.TxIns {
+		buf.Write(txIn.PrevTx)
+		binary.Write(&buf, binary.LittleEndian, txIn.PrevIndex)
+		binary.Write(&buf, binary.LittleEndian, uint32(len(txIn.Signature)))
+		buf.Write(txIn.Signature)
+		buf.WriteString(txIn.Net)
+	}
+
+	// Write number of outputs
+	binary.Write(&buf, binary.LittleEndian, uint32(len(tx.TxOuts)))
+
+	// Write each output
+	for _, txOut := range tx.TxOuts {
+		binary.Write(&buf, binary.LittleEndian, txOut.Amount)
+		binary.Write(&buf, binary.LittleEndian, uint32(len(txOut.LockingScript)))
+		buf.Write(txOut.LockingScript)
+	}
+
+	// Write locktime
+	binary.Write(&buf, binary.LittleEndian, tx.Locktimei)
+
+	// Hash the serialized data with SHA3-256
+	hash := sha3.Sum256(buf.Bytes())
+
+	// Return as hex string
+	return hex.EncodeToString(hash[:])
 }
 
-func reverseBytes(b []byte) []byte {
-	n := len(b)
-	out := make([]byte, n)
-	for i := 0; i < n; i++ {
-		out[i] = b[n-1-i]
+///////////////
+
+// Verify validates the transaction structure and signatures
+func (tx *Tx) Verify(publicKeys []*ecdsa.PublicKey) bool {
+	// Verify signatures
+	if err := tx.verifySignatures(publicKeys); err != nil {
+		return false
 	}
-	return out
+
+	// // Validate script consistency
+	// if err := tx.validateScripts(publicKeys); err != nil {
+	// 	return false
+	// }
+
+	return true
 }
 
-func DecodeTxIn(s io.Reader) (TxIn, error) {
-	var txin TxIn
-	var err error
-
-	prevTx := make([]byte, 32)
-	if _, err := io.ReadFull(s, prevTx); err != nil {
-		return TxIn{}, fmt.Errorf("failed to read prev tx: %v", err)
-	}
-	// Reverse the bytes since transaction IDs are stored in little-endian
-	txin.PrevTx = reverseBytes(prevTx)
-
-	prevIndex, err := DecodeInt(s, 4)
-	if err != nil {
-		return TxIn{}, fmt.Errorf("failed to read prev index: %v", err)
-	}
-	txin.PrevIndex = uint32(prevIndex)
-
-	scriptLen, err := DecodeVarInt(s)
-	if err != nil {
-		return TxIn{}, fmt.Errorf("failed to read script length: %v", err)
-	}
-	script := make([]byte, scriptLen)
-	if _, err := io.ReadFull(s, script); err != nil {
-		return TxIn{}, fmt.Errorf("failed to read script: %v", err)
-	}
-	txin.ScriptSig = &Script{Data: script}
-
-	sequence, err := DecodeInt(s, 4)
-	if err != nil {
-		return TxIn{}, fmt.Errorf("failed to read sequence: %v", err)
-	}
-	txin.Sequence = uint32(sequence)
-
-	return txin, nil
-}
-
-func DecodeTxOut(s io.Reader) (TxOut, error) {
-	var txout TxOut
-	var err error
-
-	amount, err := DecodeInt(s, 8)
-	if err != nil {
-		return TxOut{}, fmt.Errorf("failed to read amount: %v", err)
-	}
-	txout.Amount = amount
-
-	scriptLen, err := DecodeVarInt(s)
-	if err != nil {
-		return TxOut{}, fmt.Errorf("failed to read script length: %v", err)
-	}
-	script := make([]byte, scriptLen)
-	if _, err := io.ReadFull(s, script); err != nil {
-		return TxOut{}, fmt.Errorf("failed to read script: %v", err)
-	}
-	txout.ScriptPubKey = &Script{Data: script}
-
-	return txout, nil
-}
-
-// Idk if this is it works xd
-
-func DecodeTxBytes(data []byte) (*Tx, error) {
-	return DecodeTx(bytes.NewReader(data))
-}
-
-// vibe coded D:
-
-func (tx *Tx) Encode(force_legacy bool, sig_index int) []byte {
-	var out []byte
-
-	// encode metadata
-	version := EncodeInt(uint64(tx.Version), 4)
-	out = append(out, version...)
-
-	// Check if this is a segwit transaction
-	segwit := len(tx.TxIns) > 0 && len(tx.TxIns[0].Witness) > 0
-	if segwit && !force_legacy {
-		out = append(out, 0x00, 0x01) // segwit marker + flag bytes
+// verifySignatures validates all input signatures
+func (tx *Tx) verifySignatures(publicKeys []*ecdsa.PublicKey) error {
+	if len(publicKeys) != len(tx.TxIns) {
+		return fmt.Errorf("number of public keys (%d) must match number of inputs (%d)",
+			len(publicKeys), len(tx.TxIns))
 	}
 
-	// encode inputs
-	num_inputs := EncodeVarInt(uint64(len(tx.TxIns)))
-	out = append(out, num_inputs...)
+	// Get transaction hash for signature verification
+	txHash := tx.getHashForSigning()
 
-	if sig_index == -1 {
-		// encode all inputs normally
-		for _, txin := range tx.TxIns {
-			out = append(out, txin.Encode(false)...)
+	for i, txIn := range tx.TxIns {
+		if len(txIn.Signature) == 0 {
+			return fmt.Errorf("input %d has no signature", i)
 		}
-	} else {
-		// encode inputs with script override for the signing input
-		for i, txin := range tx.TxIns {
-			out = append(out, txin.Encode(i == sig_index)...)
+
+		// Parse signature (assuming it's r||s format)
+		if len(txIn.Signature) != 64 { // 32 bytes for r + 32 bytes for s
+			return fmt.Errorf("input %d has invalid signature length", i)
+		}
+
+		r := new(big.Int).SetBytes(txIn.Signature[:32])
+		s := new(big.Int).SetBytes(txIn.Signature[32:])
+
+		// Verify signature
+		if !ecdsa.Verify(publicKeys[i], txHash, r, s) {
+			return fmt.Errorf("input %d has invalid signature", i)
 		}
 	}
 
-	// encode outputs
-	num_outputs := EncodeVarInt(uint64(len(tx.TxOuts)))
-	out = append(out, num_outputs...)
-	for _, txout := range tx.TxOuts {
-		out = append(out, txout.Encode()...)
-	}
-
-	// encode witnesses
-	if segwit && !force_legacy {
-		for _, txin := range tx.TxIns {
-			num_witness := EncodeVarInt(uint64(len(txin.Witness)))
-			out = append(out, num_witness...)
-			for _, item := range txin.Witness {
-				if len(item) == 0 {
-					// Empty witness item
-					out = append(out, 0x00)
-				} else {
-					witness_len := EncodeVarInt(uint64(len(item)))
-					out = append(out, witness_len...)
-					out = append(out, item...)
-				}
-			}
-		}
-	}
-
-	// encode locktime
-	locktime := EncodeInt(uint64(tx.Locktimei), 4)
-	out = append(out, locktime...)
-
-	// Add SIGHASH_ALL if this is for signing
-	if sig_index != -1 {
-		sighash := EncodeInt(1, 4) // 1 = SIGHASH_ALL
-		out = append(out, sighash...)
-	}
-
-	return out
+	return nil
 }
 
-// Add Encode methods for TxIn and TxOut
-func (txin *TxIn) Encode(script_override bool) []byte {
-	var out []byte
+// // validateScripts ensures output scripts match the expected public key hashes
+// func (tx *Tx) validateScripts(publicKeys []*ecdsa.PublicKey) error {
+// 	for i, txOut := range tx.TxOuts {
+// 		if len(txOut.LockingScript) != 32 { // SHA3-256 hash length
+// 			return fmt.Errorf("output %d has invalid locking script length", i)
+// 		}
 
-	// Previous transaction ID (32 bytes)
-	out = append(out, txin.PrevTx...)
+// 		// For validation purposes, we assume the locking script should match
+// 		// the SHA3 hash of one of the provided public keys' X coordinates
+// 		scriptMatched := false
+// 		for _, pubKey := range publicKeys {
+// 			expectedScript := sha3.Sum256(pubKey.X.Bytes())
+// 			if bytes.Equal(txOut.LockingScript, expectedScript[:]) {
+// 				scriptMatched = true
+// 				break
+// 			}
+// 		}
 
-	// Previous output index (4 bytes)
-	prevIndex := EncodeInt(uint64(txin.PrevIndex), 4)
-	out = append(out, prevIndex...)
+// 		if !scriptMatched {
+// 			return fmt.Errorf("output %d locking script does not match any provided public key", i)
+// 		}
+// 	}
 
-	// Script
-	if script_override {
-		// Empty script for signing
-		out = append(out, 0x00)
-	} else {
-		scriptLen := EncodeVarInt(uint64(len(txin.ScriptSig.Data)))
-		out = append(out, scriptLen...)
-		out = append(out, txin.ScriptSig.Data...)
+// 	return nil
+// }
+
+// getHashForSigning returns the transaction hash used for signing
+func (tx *Tx) getHashForSigning() []byte {
+	// Create a copy of the transaction without signatures for hashing
+	txCopy := *tx
+	for i := range txCopy.TxIns {
+		txCopy.TxIns[i].Signature = []byte{} // Clear signatures
 	}
 
-	// Sequence (4 bytes)
-	sequence := EncodeInt(uint64(txin.Sequence), 4)
-	out = append(out, sequence...)
+	// Serialize and hash
+	var buf bytes.Buffer
+	binary.Write(&buf, binary.LittleEndian, txCopy.Version)
+	binary.Write(&buf, binary.LittleEndian, uint32(len(txCopy.TxIns)))
 
-	return out
-}
+	for _, txIn := range txCopy.TxIns {
+		buf.Write(txIn.PrevTx)
+		binary.Write(&buf, binary.LittleEndian, txIn.PrevIndex)
+		buf.WriteString(txIn.Net)
+	}
 
-func (txout *TxOut) Encode() []byte {
-	var out []byte
+	binary.Write(&buf, binary.LittleEndian, uint32(len(txCopy.TxOuts)))
+	for _, txOut := range txCopy.TxOuts {
+		binary.Write(&buf, binary.LittleEndian, txOut.Amount)
+		binary.Write(&buf, binary.LittleEndian, uint32(len(txOut.LockingScript)))
+		buf.Write(txOut.LockingScript)
+	}
 
-	// Amount (8 bytes)
-	amount := EncodeInt(txout.Amount, 8)
-	out = append(out, amount...)
+	binary.Write(&buf, binary.LittleEndian, txCopy.Locktimei)
 
-	// Script length and script
-	scriptLen := EncodeVarInt(uint64(len(txout.ScriptPubKey.Data)))
-	out = append(out, scriptLen...)
-	out = append(out, txout.ScriptPubKey.Data...)
-
-	return out
+	hash := sha3.Sum256(buf.Bytes())
+	return hash[:]
 }
