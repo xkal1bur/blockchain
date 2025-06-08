@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"encoding/hex"
 	"fmt"
 	"testing"
 
@@ -8,25 +9,25 @@ import (
 	"github.com/xkal1bur/blockchain/pkg/crypto"
 )
 
-// func TestCreateAndHashEmptyBlock(t *testing.T) {
-// 	prevBlock := crypto.Sha3_256([]byte("Random string"))
+func TestCreateAndHashEmptyBlock(t *testing.T) {
+	prevBlock := crypto.Sha3_256([]byte("Random string"))
 
-// 	block := core.Block{
-// 		Version:      1,
-// 		PrevBlock:    prevBlock,
-// 		Timestamp:    0,
-// 		Nonce:        0,
-// 		Bits:         0,
-// 		Transactions: []core.Tx{},
-// 	}
+	block := core.Block{
+		Version:      1,
+		PrevBlock:    prevBlock,
+		Timestamp:    0,
+		Nonce:        0,
+		Bits:         0,
+		Transactions: []core.Tx{},
+	}
 
-// 	hash, err := block.Hash()
-// 	if err != nil {
-// 		t.Errorf("Error calculating block hash: %v", err)
-// 	}
+	hash, err := block.Hash()
+	if err != nil {
+		t.Errorf("Error calculating block hash: %v", err)
+	}
 
-// 	t.Logf("Block hash (hex): %s", hex.EncodeToString(hash))
-// }
+	t.Logf("Block hash (hex): %s", hex.EncodeToString(hash))
+}
 
 func TestFindValidBlockHash(t *testing.T) {
 	prevBlock := crypto.Sha3_256([]byte("Random string"))

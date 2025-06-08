@@ -1,6 +1,7 @@
 package core
 
 import (
+	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
 	"math/bits"
@@ -61,27 +62,44 @@ func (b *Block) CalculateValidHash() bool {
 	return false
 }
 
-func (b *Block) ValidateBlock() bool {
+// ValidateBlock validates the block hash and optionally all transactions
+// If publicKeyMap is nil, only validates block hash
+// If publicKeyMap is provided, validates both hash and all transaction signatures
+func (b *Block) ValidateBlock(publicKeyMap map[int][]*ecdsa.PublicKey) bool {
+	// First validate the block hash
 	hash, err := b.Hash()
 	if err != nil {
 		fmt.Println("Error hashing block:", err)
 		return false
 	}
+
 	// Check if the hash meets the difficulty target
 	isHashValid := countLeadingZeroBits(hash) >= int(b.Bits)
 	if !isHashValid {
 		fmt.Println("Block hash does not meet difficulty target.")
 		return false
 	}
-	// Check if the transactions inside the block are valid
-	for _, tx := range b.Transactions {
-		if !tx.Verify() {
-			fmt.Println("Invalid transaction in block")
+
+	// If no public keys provided, only validate block hash
+	if publicKeyMap == nil {
+		fmt.Println("✅ Block hash validation successful")
+		return true
+	}
+
+	// Check if all transactions inside the block are valid
+	for i, tx := range b.Transactions {
+		publicKeys, exists := publicKeyMap[i]
+		if !exists {
+			fmt.Printf("No public keys provided for transaction %d\n", i)
+			return false
+		}
+		if !tx.Verify(publicKeys) {
+			fmt.Printf("Invalid transaction %d in block\n", i)
 			return false
 		}
 	}
-	// Check if the previous block hash is valid (if applicable)
-	// This part of the code should read the previous block's hash from the blockchain
+
+	fmt.Println("✅ Block validation successful: hash and all transactions are valid")
 	return true
 }
 

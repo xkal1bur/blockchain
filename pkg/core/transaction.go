@@ -99,7 +99,7 @@ func (tx *Tx) verifySignatures(publicKeys []*ecdsa.PublicKey) error {
 	}
 
 	// Get transaction hash for signature verification
-	txHash := tx.getHashForSigning()
+	txHash := tx.GetHashForSigning()
 
 	for i, txIn := range tx.TxIns {
 		if len(txIn.Signature) == 0 {
@@ -108,7 +108,7 @@ func (tx *Tx) verifySignatures(publicKeys []*ecdsa.PublicKey) error {
 
 		// Parse signature (assuming it's r||s format)
 		if len(txIn.Signature) != 64 { // 32 bytes for r + 32 bytes for s
-			return fmt.Errorf("input %d has invalid signature length", i)
+			return fmt.Errorf("input %d has invalid signature length: %d", i, len(txIn.Signature))
 		}
 
 		r := new(big.Int).SetBytes(txIn.Signature[:32])
@@ -149,12 +149,15 @@ func (tx *Tx) verifySignatures(publicKeys []*ecdsa.PublicKey) error {
 // 	return nil
 // }
 
-// getHashForSigning returns the transaction hash used for signing
-func (tx *Tx) getHashForSigning() []byte {
-	// Create a copy of the transaction without signatures for hashing
+// GetHashForSigning returns the transaction hash used for signing
+func (tx *Tx) GetHashForSigning() []byte {
+	// Create a deep copy of the transaction without signatures for hashing
 	txCopy := *tx
-	for i := range txCopy.TxIns {
-		txCopy.TxIns[i].Signature = []byte{} // Clear signatures
+	// Deep copy the TxIns slice
+	txCopy.TxIns = make([]TxIn, len(tx.TxIns))
+	for i, txIn := range tx.TxIns {
+		txCopy.TxIns[i] = txIn
+		txCopy.TxIns[i].Signature = []byte{} // Clear signatures in the copy only
 	}
 
 	// Serialize and hash

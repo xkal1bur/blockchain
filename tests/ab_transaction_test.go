@@ -12,14 +12,14 @@ import (
 
 func TestAliceBobTransactionVerification(t *testing.T) {
 	// Generate Alice's private key using our standard curve
-	alicePrivateKey, err := ecdsa.GenerateKey(StandardCurve, rand.Reader)
+	alicePrivateKey, err := ecdsa.GenerateKey(core.StandardCurve, rand.Reader)
 	if err != nil {
 		t.Fatalf("Failed to generate Alice's private key: %v", err)
 	}
 	alicePublicKey := &alicePrivateKey.PublicKey
 
 	// Generate Bob's private key using our standard curve
-	bobPrivateKey, err := ecdsa.GenerateKey(StandardCurve, rand.Reader)
+	bobPrivateKey, err := ecdsa.GenerateKey(core.StandardCurve, rand.Reader)
 	if err != nil {
 		t.Fatalf("Failed to generate Bob's private key: %v", err)
 	}
@@ -57,24 +57,15 @@ func TestAliceBobTransactionVerification(t *testing.T) {
 		Locktimei: uint32(time.Now().Unix()),
 	}
 
-	// Use SHA3-256 instead of SHA2-256 for transaction hashing
-	hasher := sha3.New256()
-	hasher.Write([]byte(tx1.ID()))
-	txHash := hasher.Sum(nil)
+	// Get the transaction hash for signing (BEFORE adding the signature)
+	// This must match what the Verify method uses
+	txHash := tx1.GetHashForSigning()
 
-	// ECDSA Digital Signature Process:
-	// 1. Generate random nonce k
-	// 2. Calculate point (x,y) = k * G (where G is generator point)
-	// 3. r = x mod n (where n is curve order)
-	// 4. s = k^(-1) * (hash + r * private_key) mod n
-	// 5. Signature is (r, s)
-	// Use Alice's private key to sign the transaction
 	r, s, err := ecdsa.Sign(rand.Reader, alicePrivateKey, txHash)
 	if err != nil {
 		t.Fatalf("Failed to sign transaction: %v", err)
 	}
 
-	// Combine r and s into a single signature (DER format would be better in production)
 	signature := append(r.Bytes(), s.Bytes()...)
 	tx1.TxIns[0].Signature = signature
 
@@ -88,23 +79,24 @@ func TestAliceBobTransactionVerification(t *testing.T) {
 		Transactions: []core.Tx{tx1},
 	}
 
-	hash, err := block.Hash()
-	if err != nil {
-		t.Fatalf("failed to calculate block hash: %v", err)
+	publicKeys := []*ecdsa.PublicKey{alicePublicKey}
+
+	isTransactionValid := tx1.Verify(publicKeys)
+
+	if isTransactionValid {
+		t.Logf("✅ Transaction verification: PASSED")
+	} else {
+		t.Errorf("❌ Transaction verification: FAILED")
 	}
 
-	t.Logf("Block hash: %x", hash)
-	t.Logf("Transaction signature (r,s): %x", signature)
-	t.Logf("Alice's address: %x", aliceHash)
-	t.Logf("Bob's address: %x", bobHash)
-	t.Logf("TxOut to Bob script: %x", bobHash)
-	t.Logf("TxOut to Alice (change) script: %x", aliceHash)
+	publicKeyMap := map[int][]*ecdsa.PublicKey{
+		0: {alicePublicKey}, // Transaction 0 (our tx1) needs Alice's key
+	}
 
-	// Verify ECDSA signature using Alice's public key
-	isValid := ecdsa.Verify(alicePublicKey, txHash, r, s)
-	t.Logf("Signature verification: %v", isValid)
-
-	// Log the key pairs for reference
-	t.Logf("Alice's public key: %x", alicePublicKey.X.Bytes())
-	t.Logf("Bob's public key: %x", bobPrivateKey.PublicKey.X.Bytes())
+	isBlockValid := block.ValidateBlock(publicKeyMap)
+	if isBlockValid {
+		t.Logf("✅ Block validation: PASSED")
+	} else {
+		t.Errorf("❌ Block validation: FAILED")
+	}
 }
