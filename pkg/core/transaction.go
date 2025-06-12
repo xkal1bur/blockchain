@@ -3,7 +3,6 @@ package core
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -12,12 +11,8 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
-// Standard curve for all blockchain operations
-var StandardCurve = elliptic.P256()
-
 // ------------------------------------------------------
 
-type TxFetcher struct{ CacheDir string }
 type Tx struct {
 	Version uint32
 	TxIns   []TxIn

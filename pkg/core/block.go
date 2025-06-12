@@ -116,4 +116,9 @@ func countLeadingZeroBits(hash []byte) int {
 	return count
 }
 
+// isValidHash checks if the given hash meets the difficulty target
+func (b *Block) isValidHash(hash []byte) bool {
+	return countLeadingZeroBits(hash) >= int(b.Bits)
+}
+
 // ToDo: Append block to a blockchain file . How to store its hash?
