@@ -19,10 +19,9 @@ var StandardCurve = elliptic.P256()
 
 type TxFetcher struct{ CacheDir string }
 type Tx struct {
-	Version   uint32
-	TxIns     []TxIn
-	TxOuts    []TxOut
-	Locktimei uint32
+	Version uint32
+	TxIns   []TxIn
+	TxOuts  []TxOut
 }
 type TxIn struct {
 	PrevTx    []byte
@@ -63,9 +62,6 @@ func (tx *Tx) ID() string {
 		binary.Write(&buf, binary.LittleEndian, uint32(len(txOut.LockingScript)))
 		buf.Write(txOut.LockingScript)
 	}
-
-	// Write locktime
-	binary.Write(&buf, binary.LittleEndian, tx.Locktimei)
 
 	// Hash the serialized data with SHA3-256
 	hash := sha3.Sum256(buf.Bytes())
@@ -177,8 +173,6 @@ func (tx *Tx) GetHashForSigning() []byte {
 		binary.Write(&buf, binary.LittleEndian, uint32(len(txOut.LockingScript)))
 		buf.Write(txOut.LockingScript)
 	}
-
-	binary.Write(&buf, binary.LittleEndian, txCopy.Locktimei)
 
 	hash := sha3.Sum256(buf.Bytes())
 	return hash[:]

@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"testing"
-	"time"
 
 	"github.com/xkal1bur/blockchain/pkg/core"
 	"golang.org/x/crypto/sha3"
@@ -51,10 +50,9 @@ func TestAliceBobTransactionVerification(t *testing.T) {
 
 	// Create the transaction: Alice sends to Bob and gets change back
 	tx1 := core.Tx{
-		Version:   1,
-		TxIns:     []core.TxIn{txIn1},
-		TxOuts:    []core.TxOut{txOutToBob, txOutToAliceChange},
-		Locktimei: uint32(time.Now().Unix()),
+		Version: 1,
+		TxIns:   []core.TxIn{txIn1},
+		TxOuts:  []core.TxOut{txOutToBob, txOutToAliceChange},
 	}
 
 	// Get the transaction hash for signing (BEFORE adding the signature)
