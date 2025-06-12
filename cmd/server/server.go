@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/xkal1bur/blockchain/pkg/core"
 )
@@ -43,7 +46,63 @@ func main() {
 
 		fmt.Printf("🔗 New client connected: %s\n", conn.RemoteAddr())
 
-		// Handle each connection in a goroutine
-		go server.HandleConnection(conn)
+		// Handle each connection in a goroutine with transaction printing
+		go func(c net.Conn) {
+			// Create a tee reader to both process and print the transaction
+			reader := bufio.NewReader(c)
+
+			for {
+				message, err := reader.ReadString('\n')
+				if err != nil {
+					log.Printf("Client disconnected: %v", err)
+					c.Close()
+					return
+				}
+
+				message = strings.TrimSpace(message)
+
+				// Print transaction details if it's a transaction message
+				if strings.HasPrefix(message, "TRANSACTION:") {
+					printTransaction(message)
+				}
+				fmt.Println("Now handling: ")
+
+				server.HandleConnection(c)
+			}
+		}(conn)
 	}
+}
+
+// printTransaction prints the transaction details in a human-readable format
+func printTransaction(message string) {
+	txJSON := strings.TrimPrefix(message, "TRANSACTION:")
+
+	var txMsg core.TransactionMessage
+	if err := json.Unmarshal([]byte(txJSON), &txMsg); err != nil {
+		fmt.Printf("⚠️ Failed to parse transaction: %v\n", err)
+		return
+	}
+
+	tx := txMsg.Transaction
+
+	fmt.Println("\n📜 Transaction Received (Preview)")
+	fmt.Println("=============================")
+	fmt.Printf("Transaction ID: %s\n", tx.ID())
+	fmt.Printf("Version: %d\n", tx.Version)
+	fmt.Printf("Inputs (%d):\n", len(tx.TxIns))
+	for i, input := range tx.TxIns {
+		fmt.Printf("  Input %d:\n", i+1)
+		fmt.Printf("    Previous Tx: %x\n", input.PrevTx)
+		fmt.Printf("    Index: %d\n", input.PrevIndex)
+		fmt.Printf("    Network: %s\n", input.Net)
+		fmt.Printf("    Signature: %x\n", input.Signature)
+	}
+
+	fmt.Printf("\nOutputs (%d):\n", len(tx.TxOuts))
+	for i, output := range tx.TxOuts {
+		fmt.Printf("  Output %d:\n", i+1)
+		fmt.Printf("    Amount: %d\n", output.Amount)
+		fmt.Printf("    Locking Script: %x\n", output.LockingScript)
+	}
+	fmt.Println("=============================\n")
 }
