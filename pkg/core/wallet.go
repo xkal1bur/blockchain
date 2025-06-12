@@ -145,6 +145,35 @@ func (w *Wallet) SignData(data []byte) ([]byte, error) {
 	return hash[:], nil
 }
 
+// SignECDSA signs data with ECDSA and returns signature in r||s format
+func (w *Wallet) SignECDSA(data []byte) ([]byte, error) {
+	// Get ECDSA private key
+	privateKey, err := w.GetECDSAPrivateKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ECDSA private key: %v", err)
+	}
+
+	// Sign the data
+	r, s, err := ecdsa.Sign(rand.Reader, privateKey, data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign data: %v", err)
+	}
+
+	// Combine r and s into a single byte slice (r||s format)
+	signature := make([]byte, 64) // 32 bytes for r + 32 bytes for s
+
+	// Pad r and s to 32 bytes each
+	rBytes := r.Bytes()
+	sBytes := s.Bytes()
+
+	// Copy r to the first 32 bytes (right-aligned)
+	copy(signature[32-len(rBytes):32], rBytes)
+	// Copy s to the next 32 bytes (right-aligned)
+	copy(signature[64-len(sBytes):64], sBytes)
+
+	return signature, nil
+}
+
 // VerifySignature verifies a signature against the wallet's public key
 func (w *Wallet) VerifySignature(data, signature []byte) bool {
 	// Simple verification for demonstration

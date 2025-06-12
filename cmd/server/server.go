@@ -24,14 +24,14 @@ func main() {
 		}
 	}
 
-	// Listen on TCP port 8080
-	listener, err := net.Listen("tcp", ":8080")
+	// Listen on TCP port 8081
+	listener, err := net.Listen("tcp", ":8081")
 	if err != nil {
 		log.Fatal("Error starting server:", err)
 	}
 	defer listener.Close()
 
-	fmt.Println("📡 Server listening on :8080")
+	fmt.Println("📡 Server listening on :8081")
 	fmt.Println("Protocol Messages:")
 	fmt.Println("  TRANSACTION:<json> - Submit transaction with public keys")
 	fmt.Println("  BLOCK:<json>       - Receive validated block from peer")
@@ -48,14 +48,15 @@ func main() {
 
 		// Handle each connection in a goroutine with transaction printing
 		go func(c net.Conn) {
-			// Create a tee reader to both process and print the transaction
+			defer c.Close()
+
+			// Use a custom reader to intercept and print transaction details
 			reader := bufio.NewReader(c)
 
 			for {
 				message, err := reader.ReadString('\n')
 				if err != nil {
 					log.Printf("Client disconnected: %v", err)
-					c.Close()
 					return
 				}
 
@@ -65,12 +66,37 @@ func main() {
 				if strings.HasPrefix(message, "TRANSACTION:") {
 					printTransaction(message)
 				}
-				fmt.Println("Now handling: ")
 
-				server.HandleConnection(c)
+				// Process the message using the blockchain server
+				response := processMessage(server, message)
+
+				// Send response back to client
+				_, writeErr := c.Write([]byte(response + "\n"))
+				if writeErr != nil {
+					log.Printf("Error writing response: %v", writeErr)
+					return
+				}
 			}
 		}(conn)
 	}
+}
+
+// processMessage processes a single message and returns the response
+func processMessage(server *core.BlockchainServer, message string) string {
+	var response string
+
+	// Parse different message types
+	if strings.HasPrefix(message, "TRANSACTION:") {
+		txJSON := strings.TrimPrefix(message, "TRANSACTION:")
+		response = server.ProcessTransactionMessage(txJSON)
+	} else if strings.HasPrefix(message, "BLOCK:") {
+		blockJSON := strings.TrimPrefix(message, "BLOCK:")
+		response = server.ProcessBlockMessage(blockJSON)
+	} else {
+		response = "ERROR: Unknown message format. Use TRANSACTION:<json> or BLOCK:<json>"
+	}
+
+	return response
 }
 
 // printTransaction prints the transaction details in a human-readable format

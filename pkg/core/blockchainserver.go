@@ -87,10 +87,10 @@ func (bs *BlockchainServer) HandleConnection(conn net.Conn) {
 		// Parse different message types
 		if strings.HasPrefix(message, "TRANSACTION:") {
 			txJSON := strings.TrimPrefix(message, "TRANSACTION:")
-			response = bs.processTransactionMessage(txJSON)
+			response = bs.ProcessTransactionMessage(txJSON)
 		} else if strings.HasPrefix(message, "BLOCK:") {
 			blockJSON := strings.TrimPrefix(message, "BLOCK:")
-			response = bs.processBlockMessage(blockJSON)
+			response = bs.ProcessBlockMessage(blockJSON)
 		} else {
 			response = "ERROR: Unknown message format. Use TRANSACTION:<json> or BLOCK:<json>"
 		}
@@ -100,7 +100,7 @@ func (bs *BlockchainServer) HandleConnection(conn net.Conn) {
 	}
 }
 
-func (bs *BlockchainServer) processTransactionMessage(txJSON string) string {
+func (bs *BlockchainServer) ProcessTransactionMessage(txJSON string) string {
 	// Parse transaction message with public keys
 	var txMsg TransactionMessage
 	if err := json.Unmarshal([]byte(txJSON), &txMsg); err != nil {
@@ -133,7 +133,7 @@ func (bs *BlockchainServer) processTransactionMessage(txJSON string) string {
 	return fmt.Sprintf("SUCCESS: Transaction %s added to mempool", txMsg.Transaction.ID())
 }
 
-func (bs *BlockchainServer) processBlockMessage(blockJSON string) string {
+func (bs *BlockchainServer) ProcessBlockMessage(blockJSON string) string {
 	// Parse block message
 	var blockMsg BlockMessage
 	if err := json.Unmarshal([]byte(blockJSON), &blockMsg); err != nil {
