@@ -76,7 +76,7 @@ func CreateSampleBlock_(prevBlock []byte, txs []*Tx_) *Block_ {
 // --- Función para enviar mensaje al servidor (con guion bajo) ---
 
 func sendMessage_(messageType string, payload interface{}) error {
-	conn, err := net.Dial("tcp", "192.168.35.225:8080")
+	conn, err := net.Dial("tcp", "192.168.235.29:8081")
 	if err != nil {
 		return fmt.Errorf("error connecting to server: %v", err)
 	}
@@ -108,11 +108,11 @@ func sendMessage_(messageType string, payload interface{}) error {
 
 // --- Main: elige qué enviar según argumento (con guion bajo) ---
 
-func main2() {
-	if len(os.Args) < 2 {
-		fmt.Println("Uso: client_generalized [tx|block]")
-		return
-	}
+func main() {
+	//if len(os.Args) < 2 {
+	//	fmt.Println("Uso: client_generalized [tx|block]")
+	//	return
+	//}
 
 	switch os.Args[1] {
 	case "tx":

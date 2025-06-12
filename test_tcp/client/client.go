@@ -84,7 +84,7 @@ func CreateSampleTransaction() *Tx {
 
 func main() {
 	// Connect to the server
-	conn, err := net.Dial("tcp", "192.168.35.225:8080")
+	conn, err := net.Dial("tcp", "192.168.235.29:8080")
 	if err != nil {
 		fmt.Println("Error connecting to server:", err)
 		return
