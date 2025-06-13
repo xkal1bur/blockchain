@@ -276,7 +276,7 @@ func (bs *BlockchainServer) startMining() {
 		PrevBlock:    prevBlockHash,
 		Timestamp:    uint64(time.Now().Unix()),
 		Nonce:        0,
-		Bits:         4, // Difficulty: 4 leading zero bits
+		Bits:         12, // Difficulty: 4 leading zero bits
 		Transactions: transactions,
 	}
 
