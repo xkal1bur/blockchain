@@ -199,6 +199,14 @@ func (bs *BlockchainServer) validateReceivedBlock(block Block) bool {
 			fmt.Printf("Block doesn't connect to our chain\n")
 			return false
 		}
+	} else {
+		// Genesis block: PrevBlock should be all zeros
+		allZeros := make([]byte, 32)
+		if !bytes.Equal(block.PrevBlock, allZeros) {
+			fmt.Printf("Genesis block must have all-zero PrevBlock\n")
+			return false
+		}
+		fmt.Printf("Validating genesis block\n")
 	}
 
 	// Validate Proof of Work

@@ -1,17 +1,17 @@
 package main
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"time"
 
 	"github.com/xkal1bur/blockchain/pkg/core"
 )
 
-// walllets to send: bc112bc6bc381a9a05dfed7eeeb26c87da9d2bad321, bc1623e0f3f6d64de891b0633f0a6e09a4e6ad91229
+// walllets to send:
+// ar: c8c3a919c9ca981291263d9ccdc2b04e9432bbf57ff0a84dcd53c7b74fc79aa7
+// an: e4cf9ec444babdf51e5783162ba14efb5210447f40f5d842ab23c945c7dfc643
 
 func main() {
 	// 1) Cargar o crear wallet local
@@ -35,7 +35,7 @@ func main() {
 	fmt.Println("⚙️  Creando bloque génesis para el wallet…")
 	amountGenesis := uint64(1_000_000)
 
-	targets := []string{"bc112bc6bc381a9a05dfed7eeeb26c87da9d2bad321", "bc1623e0f3f6d64de891b0633f0a6e09a4e6ad91229"}
+	targets := []string{"c8c3a919c9ca981291263d9ccdc2b04e9432bbf57ff0a84dcd53c7b74fc79aa7", "e4cf9ec444babdf51e5783162ba14efb5210447f40f5d842ab23c945c7dfc643"}
 
 	// Única coinbase con 3 salidas por destino
 	var outputs []core.TxOut
@@ -59,21 +59,17 @@ func main() {
 		Transactions: []core.Tx{coinbaseTx},
 	}
 
-	// Guardar blockchain.json
-	chainData, _ := json.MarshalIndent([]core.Block{genesis}, "", "  ")
-	os.WriteFile("blockchain.json", chainData, 0644)
-	// 3) Construir y guardar utxos.json correspondiente
-	utxoSet := make(map[string]core.TxOut)
-	txID := coinbaseTx.ID()
-	for idx, out := range coinbaseTx.TxOuts {
-		key := fmt.Sprintf("%s:%d", txID, idx)
-		utxoSet[key] = out
+	// Calcular Proof of Work para el bloque génesis
+	fmt.Println("⛏️  Minando bloque génesis...")
+	if !genesis.CalculateValidHash() {
+		fmt.Println("❌ Error: No se pudo minar el bloque génesis")
+		return
 	}
-	core.SaveUTXOs("utxos.json", utxoSet)
 
-	fmt.Printf("✅ Génesis guardado: 1 transacción coinbase con %d UTXO\n", len(utxoSet))
+	hash, _ := genesis.Hash()
+	fmt.Printf("✅ Bloque génesis minado! Nonce: %d, Hash: %x\n", genesis.Nonce, hash)
 
-	// 4) Enviar el bloque génesis al servidor
+	// 3) Enviar el bloque génesis al servidor
 	conn, err := net.Dial("tcp", "localhost:8081")
 	if err != nil {
 		fmt.Println("⚠️  Inicia primero el servidor TCP para enviar transacciones")
@@ -89,12 +85,4 @@ func main() {
 	fmt.Printf("📤 Bloque génesis enviado. Respuesta: %s\n", string(buf[:n]))
 
 	// Fin
-}
-
-func hashBlock(b core.Block) string {
-	h, err := b.Hash()
-	if err != nil {
-		return "error"
-	}
-	return hex.EncodeToString(h)[:16]
 }

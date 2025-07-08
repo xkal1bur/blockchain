@@ -94,6 +94,12 @@ func ParsePubKeySafe(pub []byte) (*ecdsa.PublicKey, error) {
 // Validate ejecuta la verificación completa usando las transacciones previas (prevTxs)
 // prevTxs es un mapa txID(hex) → *Tx
 func (tx *Tx) Validate(prevTxs map[string]*Tx) bool {
+	// Special case: coinbase transactions (no inputs) are always valid
+	if len(tx.TxIns) == 0 {
+		fmt.Println("✅ Transacción coinbase válida (sin inputs)")
+		return true
+	}
+
 	msg := tx.GetHashForSigning()
 
 	for i, txin := range tx.TxIns {
