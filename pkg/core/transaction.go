@@ -28,6 +28,8 @@ type TxIn struct {
 	Net       string // Red
 }
 type TxOut struct {
+	TxID          string
+	Index         uint32
 	Amount        uint64
 	LockingScript []byte
 }
@@ -141,6 +143,7 @@ func (tx *Tx) Validate(prevTxs map[string]*Tx) bool {
 	return true
 }
 
+/*
 // bytesToECDSAPublicKey is now superseded by ParsePubKeySafe; left for compatibility if needed.
 func bytesToECDSAPublicKey(data []byte) (*ecdsa.PublicKey, error) {
 	if len(data) == 0 {
@@ -160,7 +163,7 @@ func bytesToECDSAPublicKey(data []byte) (*ecdsa.PublicKey, error) {
 		X:     x,
 		Y:     y,
 	}, nil
-}
+}*/
 
 // GetHashForSigning returns the transaction hash used for signing
 func (tx *Tx) GetHashForSigning() []byte {
@@ -193,4 +196,85 @@ func (tx *Tx) GetHashForSigning() []byte {
 
 	hash := sha3.Sum256(buf.Bytes())
 	return hash[:]
+}
+
+// CreateTransaction genera una nueva transacción firmada por el wallet, usando sus UTXOs.
+func CreateTransaction(sender *Wallet, recipientAddress string, amount uint64, utxos map[string]TxOut) (*Tx, error) {
+	var (
+		inputs      []TxIn
+		outputs     []TxOut
+		accumulated uint64
+		//usedOutRefs []string
+	)
+
+	// 1. Seleccionar UTXOs suficientes para cubrir el monto
+	for outRef, txOut := range utxos {
+		if string(txOut.LockingScript) != sender.Address {
+			continue // Solo usar salidas propias
+		}
+
+		accumulated += txOut.Amount
+		parts := bytes.Split([]byte(outRef), []byte(":"))
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid UTXO key: %s", outRef)
+		}
+
+		prevTxHash, err := hex.DecodeString(string(parts[0]))
+		if err != nil {
+			return nil, fmt.Errorf("invalid hex txid: %v", err)
+		}
+
+		prevIndex := 0
+		fmt.Sscanf(string(parts[1]), "%d", &prevIndex)
+
+		// Crear TxIn
+		txIn := TxIn{
+			PrevTx:    prevTxHash,
+			PrevIndex: uint32(prevIndex),
+			PubKey:    sender.PublicKey,
+		}
+
+		inputs = append(inputs, txIn)
+		//usedOutRefs = append(usedOutRefs, outRef)
+
+		if accumulated >= amount {
+			break
+		}
+	}
+
+	if accumulated < amount {
+		return nil, fmt.Errorf("not enough funds: need %d, but only have %d", amount, accumulated)
+	}
+
+	// 2. Crear salidas: una para receptor, una para cambio
+	outputs = append(outputs, TxOut{
+		Amount:        amount,
+		LockingScript: []byte(recipientAddress),
+	})
+	change := accumulated - amount
+	if change > 0 {
+		outputs = append(outputs, TxOut{
+			Amount:        change,
+			LockingScript: []byte(sender.Address),
+		})
+	}
+
+	// 3. Crear transacción
+	tx := &Tx{
+		TxIns:  inputs,
+		TxOuts: outputs,
+	}
+
+	// 4. Firmar inputs
+	for i := range tx.TxIns {
+		sigHash := tx.GetHashForSigning()
+		sig, err := sender.SignECDSA(sigHash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to sign input %d: %v", i, err)
+		}
+		tx.TxIns[i].Signature = sig
+		tx.TxIns[i].PubKey = sender.PublicKey
+	}
+
+	return tx, nil
 }

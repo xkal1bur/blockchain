@@ -27,6 +27,14 @@ type BlockchainServer struct {
 	utxoSet map[string]TxOut // Unspent transaction outputs
 }
 
+type StatusResponse struct {
+	BlockCount   int    `json:"block_count"`
+	LatestHash   string `json:"latest_hash"`
+	TotalTxs     int    `json:"total_txs"`
+	TotalBalance uint64 `json:"total_balance,omitempty"`
+	Message      string `json:"message,omitempty"`
+}
+
 // TransactionMessage represents a transaction with its public key for validation
 type TransactionMessage struct {
 	Transaction Tx              `json:"transaction"`
@@ -98,6 +106,46 @@ func (bs *BlockchainServer) HandleConnection(conn net.Conn) {
 		} else if strings.HasPrefix(message, "BLOCK:") {
 			blockJSON := strings.TrimPrefix(message, "BLOCK:")
 			response = bs.ProcessBlockMessage(blockJSON)
+		} else if strings.HasPrefix(message, "STATUS") {
+			var address string
+			if strings.Contains(message, ":") {
+				address = strings.TrimPrefix(message, "STATUS:")
+			}
+
+			bs.mu.Lock()
+			latestHash := ""
+			if len(bs.blockchain) > 0 {
+				hashBytes, err := bs.blockchain[len(bs.blockchain)-1].Hash()
+				if err == nil {
+					latestHash = hex.EncodeToString(hashBytes)
+				}
+			}
+
+			balance := uint64(0)
+			if address != "" {
+				for _, utxo := range bs.utxoSet {
+					if string(utxo.LockingScript) == address {
+						balance += utxo.Amount
+					}
+				}
+			}
+
+			status := struct {
+				BlockCount   int    `json:"block_count"`
+				LatestHash   string `json:"latest_hash"`
+				TotalTxs     int    `json:"total_txs"`
+				TotalBalance uint64 `json:"total_balance,omitempty"`
+			}{
+				BlockCount:   len(bs.blockchain),
+				LatestHash:   latestHash,
+				TotalTxs:     bs.countAllTransactions(),
+				TotalBalance: balance,
+			}
+
+			responseBytes, _ := json.Marshal(status)
+			bs.mu.Unlock()
+			response = string(responseBytes)
+
 		} else {
 			response = "ERROR: Unknown message format. Use TRANSACTION:<json> or BLOCK:<json>"
 		}
@@ -428,4 +476,131 @@ func (bs *BlockchainServer) updateUTXOSetWithBlock(block Block) {
 			bs.utxoSet[key] = out
 		}
 	}
+}
+
+func (bs *BlockchainServer) GetUTXOsForAddress(address string) []TxOut {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	var utxos []TxOut
+	for _, txOut := range bs.utxoSet {
+		if string(txOut.LockingScript) == address {
+			utxos = append(utxos, txOut)
+		}
+	}
+	return utxos
+}
+
+var globalUTXOSet map[string]TxOut
+
+func SetGlobalUTXOSet(utxos map[string]TxOut) {
+	globalUTXOSet = utxos
+}
+
+func GetUTXOsForAddress(address string) []TxOut {
+	var utxos []TxOut
+	for key, txOut := range globalUTXOSet {
+		if string(txOut.LockingScript) == address {
+			// También necesitas incluir el ID y el índice si usas TxOut extendido
+			parts := strings.Split(key, ":")
+			if len(parts) != 2 {
+				continue
+			}
+			// parse index
+			var index uint32
+			fmt.Sscanf(parts[1], "%d", &index)
+
+			utxos = append(utxos, TxOut{
+				TxID:          parts[0],
+				Index:         index,
+				Amount:        txOut.Amount,
+				LockingScript: txOut.LockingScript,
+			})
+		}
+	}
+	return utxos
+}
+
+// Devuelve el número de bloques actuales
+func (bs *BlockchainServer) GetBlockchainLength() int {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	return len(bs.blockchain)
+}
+
+// Devuelve el hash del último bloque (o "GENESIS" si no hay bloques)
+func (bs *BlockchainServer) GetLatestBlockHash() string {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	if len(bs.blockchain) == 0 {
+		return "GENESIS"
+	}
+	hash, err := bs.blockchain[len(bs.blockchain)-1].Hash()
+	if err != nil {
+		return fmt.Sprintf("ERROR: %v", err)
+	}
+	return hex.EncodeToString(hash)
+}
+
+// Devuelve una copia del mempool actual
+func (bs *BlockchainServer) GetMempool() []Tx {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	cpy := make([]Tx, len(bs.pendingTransactions))
+	copy(cpy, bs.pendingTransactions)
+	return cpy
+}
+
+func (bs *BlockchainServer) ProcessStatusMessage(message string) string {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	resp := StatusResponse{
+		BlockCount: len(bs.blockchain),
+		LatestHash: "GENESIS",
+		TotalTxs:   0,
+	}
+
+	if len(bs.blockchain) > 0 {
+		lastHash, err := bs.blockchain[len(bs.blockchain)-1].Hash()
+		if err == nil {
+			resp.LatestHash = fmt.Sprintf("%x", lastHash)
+		}
+	}
+
+	// Contar todas las transacciones
+	for _, blk := range bs.blockchain {
+		resp.TotalTxs += len(blk.Transactions)
+	}
+
+	// Si se consulta un balance específico
+	if strings.Contains(message, ":") {
+		parts := strings.SplitN(message, ":", 2)
+		if len(parts) == 2 {
+			address := strings.TrimSpace(parts[1])
+			var balance uint64
+			for _, txOut := range bs.utxoSet {
+				if string(txOut.LockingScript) == address {
+					balance += txOut.Amount
+				}
+			}
+			resp.TotalBalance = balance
+		}
+	}
+
+	respJSON, err := json.Marshal(resp)
+	if err != nil {
+		return fmt.Sprintf(`{"message":"error serializando respuesta: %v"}`, err)
+	}
+	return string(respJSON)
+}
+
+func (bs *BlockchainServer) countAllTransactions() int {
+	total := 0
+	for _, blk := range bs.blockchain {
+		total += len(blk.Transactions)
+	}
+	return total
 }

@@ -1,0 +1,25 @@
+[
+  {
+    "version": 1,
+    "prev_block": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "timestamp": 1751999671,
+    "nonce": 0,
+    "bits": 1,
+    "transactions": [
+      {
+        "Version": 1,
+        "TxIns": [],
+        "TxOuts": [
+          {
+            "Amount": 1000000,
+            "LockingScript": "YmMxNjIzZTBmM2Y2ZDY0ZGU4OTFiMDYzM2YwYTZlMDlhNGU2YWQ5MTIyOQ=="
+          },
+          {
+            "Amount": 1000000,
+            "LockingScript": "YmMxMTJiYzZiYzM4MWE5YTA1ZGZlZDdlZWViMjZjODdkYTlkMmJhZDMyMQ=="
+          }
+        ]
+      }
+    ]
+  }
+]

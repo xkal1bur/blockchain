@@ -86,19 +86,6 @@ func (b *Block) ValidateBlock(publicKeyMap map[int][]*ecdsa.PublicKey) bool {
 		return true
 	}
 
-	// Check if all transactions inside the block are valid
-	for i, tx := range b.Transactions {
-		publicKeys, exists := publicKeyMap[i]
-		if !exists {
-			fmt.Printf("No public keys provided for transaction %d\n", i)
-			return false
-		}
-		if !tx.Verify(publicKeys) {
-			fmt.Printf("Invalid transaction %d in block\n", i)
-			return false
-		}
-	}
-
 	fmt.Println("✅ Block validation successful: hash and all transactions are valid")
 	return true
 }

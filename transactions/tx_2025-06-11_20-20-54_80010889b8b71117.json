@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "txins": [
+    {
+      "prevtx": "YWJjZGVmMTIzNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4OTBhYmNkZWYxMjM0NTY3ODkwYWJjZGVmMTIzNDU2Nzg5MA==",
+      "previndex": 0,
+      "sequence": 4294967295,
+      "witness": [],
+      "net": "main2"
+    }
+  ],
+  "txouts": [
+    {
+      "amount": 100000,
+      "address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+    },
+    {
+      "amount": 50000,
+      "address": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"
+    },
+    {
+      "amount": 25000,
+      "address": "1C4bc762dd5423e332166702cb75f40df79"
+    }
+  ],
+  "locktime": 0
+}
