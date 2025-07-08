@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -12,6 +13,8 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"golang.org/x/crypto/sha3"
 )
@@ -185,12 +188,9 @@ func (w *Wallet) VerifySignature(data, signature []byte) bool {
 
 // generateAddress creates an address from a public key
 func generateAddress(publicKey []byte) string {
-	// Hash the public key with SHA3-256
+	// Full SHA3-256 hash encoded as hex (64 chars)
 	hash := sha3.Sum256(publicKey)
-
-	// Take first 20 bytes and encode as hex with prefix
-	address := fmt.Sprintf("bc1%x", hash[:20])
-	return address
+	return hex.EncodeToString(hash[:])
 }
 
 // getCurrentTimestamp returns current Unix timestamp
@@ -264,4 +264,161 @@ func (w *Wallet) GetPublicKeyData() (PublicKeyData, error) {
 		X: hex.EncodeToString(publicKey.X.Bytes()),
 		Y: hex.EncodeToString(publicKey.Y.Bytes()),
 	}, nil
+}
+
+// GetLockingScript returns the wallet's locking script (SHA3-256 of its public key)
+func (w *Wallet) GetLockingScript() []byte {
+	return []byte(w.Address)
+}
+
+// FindSpendableUTXOs selects UTXOs from utxoSet belonging to this wallet until amount is reached
+// Returns slice of keys and total amount gathered
+func (w *Wallet) FindSpendableUTXOs(utxoSet map[string]TxOut, amount uint64) ([]string, uint64, error) {
+	var selected []string
+	var total uint64
+	script := []byte(w.Address)
+
+	for key, out := range utxoSet {
+		if bytes.Equal(out.LockingScript, script) {
+			selected = append(selected, key)
+			total += out.Amount
+			if total >= amount {
+				break
+			}
+		}
+	}
+
+	if total < amount {
+		return nil, 0, fmt.Errorf("insufficient funds: needed %d, available %d", amount, total)
+	}
+	return selected, total, nil
+}
+
+// BuildTransaction builds and signs a transaction sending 'amount' to destPubKey.
+// utxoSet is required to choose inputs. Returns the transaction and the keys used.
+func (w *Wallet) BuildTransaction(destPubKey []byte, amount uint64, utxoSet map[string]TxOut) (Tx, []string, error) {
+	inputKeys, totalIn, err := w.FindSpendableUTXOs(utxoSet, amount)
+	if err != nil {
+		return Tx{}, nil, err
+	}
+
+	tx := Tx{Version: 1}
+
+	// Create inputs
+	for _, key := range inputKeys {
+		parts := strings.Split(key, ":")
+		if len(parts) != 2 {
+			return Tx{}, nil, fmt.Errorf("invalid utxo key %s", key)
+		}
+		txidHex := parts[0]
+		idxStr := parts[1]
+		idxParsed, _ := strconv.Atoi(idxStr)
+
+		txidBytes, err := hex.DecodeString(txidHex)
+		if err != nil {
+			return Tx{}, nil, fmt.Errorf("invalid txid hex: %v", err)
+		}
+
+		tx.TxIns = append(tx.TxIns, TxIn{
+			PrevTx:    txidBytes,
+			PrevIndex: uint32(idxParsed),
+			Signature: []byte{},
+			PubKey:    w.PublicKey,
+			Net:       "mainnet",
+		})
+	}
+
+	// Outputs: recipient + change (if any)
+	tx.TxOuts = append(tx.TxOuts, TxOut{
+		Amount:        amount,
+		LockingScript: []byte(hex.EncodeToString(HashSHA3(destPubKey))),
+	})
+
+	change := totalIn - amount
+	if change > 0 {
+		tx.TxOuts = append(tx.TxOuts, TxOut{
+			Amount:        change,
+			LockingScript: w.GetLockingScript(),
+		})
+	}
+
+	// Sign inputs
+	hashForSign := tx.GetHashForSigning()
+	sig, err := w.SignECDSA(hashForSign)
+	if err != nil {
+		return Tx{}, nil, err
+	}
+
+	for i := range tx.TxIns {
+		tx.TxIns[i].Signature = sig
+	}
+
+	return tx, inputKeys, nil
+}
+
+// BuildTransactionToAddress creates a tx sending 'amount' to a destination address string (locking script = address bytes)
+func (w *Wallet) BuildTransactionToAddress(destAddress string, amount uint64, utxoSet map[string]TxOut) (Tx, []string, error) {
+	inputKeys, totalIn, err := w.FindSpendableUTXOs(utxoSet, amount)
+	if err != nil {
+		return Tx{}, nil, err
+	}
+
+	tx := Tx{Version: 1}
+
+	// inputs
+	for _, key := range inputKeys {
+		parts := strings.Split(key, ":")
+		if len(parts) != 2 {
+			return Tx{}, nil, fmt.Errorf("invalid utxo key %s", key)
+		}
+		txidBytes, _ := hex.DecodeString(parts[0])
+		idx, _ := strconv.Atoi(parts[1])
+
+		tx.TxIns = append(tx.TxIns, TxIn{
+			PrevTx:    txidBytes,
+			PrevIndex: uint32(idx),
+			PubKey:    w.PublicKey,
+			Signature: []byte{},
+			Net:       "mainnet",
+		})
+	}
+
+	// outputs: destination + change
+	tx.TxOuts = append(tx.TxOuts, TxOut{Amount: amount, LockingScript: []byte(destAddress)})
+	change := totalIn - amount
+	if change > 0 {
+		tx.TxOuts = append(tx.TxOuts, TxOut{Amount: change, LockingScript: w.GetLockingScript()})
+	}
+
+	// sign
+	hash := tx.GetHashForSigning()
+	sig, err := w.SignECDSA(hash)
+	if err != nil {
+		return Tx{}, nil, err
+	}
+	for i := range tx.TxIns {
+		tx.TxIns[i].Signature = sig
+	}
+	return tx, inputKeys, nil
+}
+
+// FilterUTXOs returns a subset of utxoSet that belong to this wallet
+func (w *Wallet) FilterUTXOs(utxoSet map[string]TxOut) map[string]TxOut {
+	res := make(map[string]TxOut)
+	script := []byte(w.Address)
+	for k, v := range utxoSet {
+		if bytes.Equal(v.LockingScript, script) {
+			res[k] = v
+		}
+	}
+	return res
+}
+
+// SaveUTXOs saves given utxo map to filename in JSON format
+func SaveUTXOs(filename string, utxoMap map[string]TxOut) error {
+	data, err := json.MarshalIndent(utxoMap, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filename, data, 0644)
 }

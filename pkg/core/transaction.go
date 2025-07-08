@@ -112,10 +112,10 @@ func (tx *Tx) Validate(prevTxs map[string]*Tx) bool {
 		}
 		prevOut := prevTx.TxOuts[txin.PrevIndex]
 
-		// 3. Comparar HashSHA3(pubkey) con LockingScript
-		pubKeyHash := HashSHA3(txin.PubKey)
-		if !bytes.Equal(pubKeyHash, prevOut.LockingScript) {
-			fmt.Printf("❌ El hash del pubkey no coincide con el LockingScript\n")
+		// 3. Comparar dirección derivada (hex del hash) con LockingScript
+		addr := hex.EncodeToString(HashSHA3(txin.PubKey))
+		if string(prevOut.LockingScript) != addr {
+			fmt.Printf("❌ El locking script no coincide con la dirección derivada\n")
 			return false
 		}
 

@@ -45,7 +45,7 @@ func main() {
 
 	// Connect to the server
 	fmt.Println("\n🌐 Connecting to blockchain server...")
-	conn, err := net.Dial("tcp", "localhost:8081")
+	conn, err := net.Dial("tcp", "192.168.37.226:8081")
 	if err != nil {
 		fmt.Println("Error connecting:", err)
 		return

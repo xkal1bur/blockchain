@@ -45,6 +45,8 @@ type BlockMessage struct {
 	PublicKeys [][]PublicKeyData `json:"public_keys"` // Public keys for each transaction
 }
 
+const utxoFile = "utxos.json"
+
 func NewBlockchainServer() *BlockchainServer {
 	server := &BlockchainServer{
 		pendingTransactions: make([]Tx, 0),
@@ -59,10 +61,15 @@ func NewBlockchainServer() *BlockchainServer {
 	// Load existing blockchain from disk
 	server.loadBlockchain()
 
-	// Rebuild UTXO set from loaded blockchain
-	server.rebuildUTXOSet()
+	// Try to load persisted UTXO set
+	if err := server.loadUTXOSet(); err != nil {
+		fmt.Println("🗄️  No UTXO set file found, rebuilding from blockchain…")
+		server.rebuildUTXOSet()
+		server.saveUTXOSet()
+	}
 
 	return server
+
 }
 
 // AddPeer adds a peer server address for block broadcasting
@@ -276,8 +283,6 @@ func (bs *BlockchainServer) startMining() {
 			return
 		}
 		prevBlockHash = hash
-	} else {
-		prevBlockHash = make([]byte, 32) // Genesis block
 	}
 
 	block := Block{
@@ -427,5 +432,37 @@ func (bs *BlockchainServer) updateUTXOSetWithBlock(block Block) {
 			key := fmt.Sprintf("%s:%d", txID, idx)
 			bs.utxoSet[key] = out
 		}
+	}
+
+	// Persist updated set
+	bs.saveUTXOSet()
+}
+
+// loadUTXOSet loads UTXOs from disk into memory
+func (bs *BlockchainServer) loadUTXOSet() error {
+	data, err := os.ReadFile(utxoFile)
+	if err != nil {
+		return err
+	}
+	var m map[string]TxOut
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	bs.utxoSet = m
+	fmt.Printf("🔄 UTXO set loaded (%d entries)\n", len(m))
+	return nil
+}
+
+func (bs *BlockchainServer) saveUTXOSet() {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	data, err := json.MarshalIndent(bs.utxoSet, "", "  ")
+	if err != nil {
+		log.Printf("Error marshaling UTXO set: %v", err)
+		return
+	}
+	if err := os.WriteFile(utxoFile, data, 0644); err != nil {
+		log.Printf("Error writing UTXO set: %v", err)
+		return
 	}
 }
