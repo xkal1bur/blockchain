@@ -12,6 +12,8 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/crypto/sha3"
 )
 
 // Standard curve for all blockchain operations
@@ -183,8 +185,8 @@ func (w *Wallet) VerifySignature(data, signature []byte) bool {
 
 // generateAddress creates an address from a public key
 func generateAddress(publicKey []byte) string {
-	// Hash the public key
-	hash := sha256.Sum256(publicKey)
+	// Hash the public key with SHA3-256
+	hash := sha3.Sum256(publicKey)
 
 	// Take first 20 bytes and encode as hex with prefix
 	address := fmt.Sprintf("bc1%x", hash[:20])

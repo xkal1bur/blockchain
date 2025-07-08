@@ -3,8 +3,10 @@ package core
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -19,10 +21,11 @@ type Tx struct {
 	TxOuts  []TxOut
 }
 type TxIn struct {
-	PrevTx    []byte
-	PrevIndex uint32
-	Signature []byte
-	Net       string
+	PrevTx    []byte // ID de la transacción previa
+	PrevIndex uint32 // Índice de la salida que se gasta
+	Signature []byte // Firma r||s del dueño de la salida
+	PubKey    []byte // Clave pública en formato no comprimido (0x04 + 64 bytes)
+	Net       string // Red
 }
 type TxOut struct {
 	Amount        uint64
@@ -65,80 +68,99 @@ func (tx *Tx) ID() string {
 	return hex.EncodeToString(hash[:])
 }
 
-///////////////
+// HashSHA3 devuelve SHA3-256(data)
+func HashSHA3(data []byte) []byte {
+	sum := sha3.Sum256(data)
+	return sum[:]
+}
 
-// Verify validates the transaction structure and signatures
-func (tx *Tx) Verify(publicKeys []*ecdsa.PublicKey) bool {
-	// Verify signatures
-	if err := tx.verifySignatures(publicKeys); err != nil {
-		return false
+// ParsePubKeySafe convierte bytes (0x04 + 64) a *ecdsa.PublicKey y valida que esté en la curva
+func ParsePubKeySafe(pub []byte) (*ecdsa.PublicKey, error) {
+	if len(pub) != 65 || pub[0] != 0x04 {
+		return nil, errors.New("clave pública debe estar en formato no comprimido (0x04 + 64 bytes)")
 	}
 
-	// // Validate script consistency
-	// if err := tx.validateScripts(publicKeys); err != nil {
-	// 	return false
-	// }
+	x := new(big.Int).SetBytes(pub[1:33])
+	y := new(big.Int).SetBytes(pub[33:])
 
+	curve := elliptic.P256()
+	if !curve.IsOnCurve(x, y) {
+		return nil, errors.New("la clave pública no está en la curva")
+	}
+
+	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+}
+
+// Validate ejecuta la verificación completa usando las transacciones previas (prevTxs)
+// prevTxs es un mapa txID(hex) → *Tx
+func (tx *Tx) Validate(prevTxs map[string]*Tx) bool {
+	msg := tx.GetHashForSigning()
+
+	for i, txin := range tx.TxIns {
+		// 1. Obtener la transacción previa
+		prevTxID := hex.EncodeToString(txin.PrevTx)
+		prevTx, ok := prevTxs[prevTxID]
+		if !ok {
+			fmt.Printf("❌ Transacción previa %s no encontrada\n", prevTxID)
+			return false
+		}
+
+		// 2. Verificar índice válido
+		if int(txin.PrevIndex) >= len(prevTx.TxOuts) {
+			fmt.Printf("❌ Índice inválido en input #%d\n", i)
+			return false
+		}
+		prevOut := prevTx.TxOuts[txin.PrevIndex]
+
+		// 3. Comparar HashSHA3(pubkey) con LockingScript
+		pubKeyHash := HashSHA3(txin.PubKey)
+		if !bytes.Equal(pubKeyHash, prevOut.LockingScript) {
+			fmt.Printf("❌ El hash del pubkey no coincide con el LockingScript\n")
+			return false
+		}
+
+		// 4. Verificar la firma
+		pubKey, err := ParsePubKeySafe(txin.PubKey)
+		if err != nil {
+			fmt.Printf("❌ Error al parsear pubkey: %v\n", err)
+			return false
+		}
+		if len(txin.Signature) != 64 {
+			fmt.Printf("❌ Firma inválida (esperado 64 bytes, got %d)\n", len(txin.Signature))
+			return false
+		}
+		r := new(big.Int).SetBytes(txin.Signature[:32])
+		s := new(big.Int).SetBytes(txin.Signature[32:])
+		if !ecdsa.Verify(pubKey, msg, r, s) {
+			fmt.Printf("❌ Firma inválida en input #%d\n", i)
+			return false
+		}
+	}
+
+	fmt.Println("✅ Transacción válida")
 	return true
 }
 
-// verifySignatures validates all input signatures
-func (tx *Tx) verifySignatures(publicKeys []*ecdsa.PublicKey) error {
-	if len(publicKeys) != len(tx.TxIns) {
-		return fmt.Errorf("number of public keys (%d) must match number of inputs (%d)",
-			len(publicKeys), len(tx.TxIns))
+// bytesToECDSAPublicKey is now superseded by ParsePubKeySafe; left for compatibility if needed.
+func bytesToECDSAPublicKey(data []byte) (*ecdsa.PublicKey, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty public key bytes")
 	}
 
-	// Get transaction hash for signature verification
-	txHash := tx.GetHashForSigning()
-
-	for i, txIn := range tx.TxIns {
-		if len(txIn.Signature) == 0 {
-			return fmt.Errorf("input %d has no signature", i)
-		}
-
-		// Parse signature (assuming it's r||s format)
-		if len(txIn.Signature) != 64 { // 32 bytes for r + 32 bytes for s
-			return fmt.Errorf("input %d has invalid signature length: %d", i, len(txIn.Signature))
-		}
-
-		r := new(big.Int).SetBytes(txIn.Signature[:32])
-		s := new(big.Int).SetBytes(txIn.Signature[32:])
-
-		// Verify signature
-		if !ecdsa.Verify(publicKeys[i], txHash, r, s) {
-			return fmt.Errorf("input %d has invalid signature", i)
-		}
+	// Public key debe estar en formato sin comprimir (65 bytes) y prefijo 0x04
+	if len(data) != 65 || data[0] != 0x04 {
+		return nil, fmt.Errorf("invalid uncompressed public key format; expected 65 bytes starting with 0x04")
 	}
 
-	return nil
+	x := new(big.Int).SetBytes(data[1:33])
+	y := new(big.Int).SetBytes(data[33:])
+
+	return &ecdsa.PublicKey{
+		Curve: StandardCurve,
+		X:     x,
+		Y:     y,
+	}, nil
 }
-
-// // validateScripts ensures output scripts match the expected public key hashes
-// func (tx *Tx) validateScripts(publicKeys []*ecdsa.PublicKey) error {
-// 	for i, txOut := range tx.TxOuts {
-// 		if len(txOut.LockingScript) != 32 { // SHA3-256 hash length
-// 			return fmt.Errorf("output %d has invalid locking script length", i)
-// 		}
-
-// 		// For validation purposes, we assume the locking script should match
-// 		// the SHA3 hash of one of the provided public keys' X coordinates
-// 		scriptMatched := false
-// 		for _, pubKey := range publicKeys {
-// 			expectedScript := sha3.Sum256(pubKey.X.Bytes())
-// 			if bytes.Equal(txOut.LockingScript, expectedScript[:]) {
-// 				scriptMatched = true
-// 				break
-// 			}
-// 		}
-
-// 		if !scriptMatched {
-// 			return fmt.Errorf("output %d locking script does not match any provided public key", i)
-// 		}
-// 	}
-
-// 	return nil
-// }
 
 // GetHashForSigning returns the transaction hash used for signing
 func (tx *Tx) GetHashForSigning() []byte {

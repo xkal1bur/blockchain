@@ -23,6 +23,8 @@ type BlockchainServer struct {
 	mu                  sync.Mutex
 	blockchainFile      string
 	peerServers         []string // List of peer server addresses
+
+	utxoSet map[string]TxOut // Unspent transaction outputs
 }
 
 // TransactionMessage represents a transaction with its public key for validation
@@ -50,10 +52,15 @@ func NewBlockchainServer() *BlockchainServer {
 		isMining:            false,
 		blockchainFile:      "blockchain.json",
 		peerServers:         []string{}, // Will be configured later
+
+		utxoSet: make(map[string]TxOut),
 	}
 
 	// Load existing blockchain from disk
 	server.loadBlockchain()
+
+	// Rebuild UTXO set from loaded blockchain
+	server.rebuildUTXOSet()
 
 	return server
 }
@@ -101,7 +108,7 @@ func (bs *BlockchainServer) HandleConnection(conn net.Conn) {
 }
 
 func (bs *BlockchainServer) ProcessTransactionMessage(txJSON string) string {
-	// Parse transaction message with public keys
+	// Parse the transaction message (we ignore PublicKeys field now)
 	var txMsg TransactionMessage
 	if err := json.Unmarshal([]byte(txJSON), &txMsg); err != nil {
 		return fmt.Sprintf("ERROR: Invalid transaction message JSON: %v", err)
@@ -109,25 +116,18 @@ func (bs *BlockchainServer) ProcessTransactionMessage(txJSON string) string {
 
 	fmt.Printf("Processing transaction: %s\n", txMsg.Transaction.ID())
 
-	// Convert public key data to ecdsa.PublicKey
-	publicKeys, err := bs.parsePublicKeys(txMsg.PublicKeys)
-	if err != nil {
-		return fmt.Sprintf("ERROR: Invalid public keys: %v", err)
+	prevMap := bs.buildPrevTxMap()
+
+	if !txMsg.Transaction.Validate(prevMap) {
+		return "ERROR: Transaction validation failed"
 	}
 
-	// Verify transaction with provided public keys
-	if !txMsg.Transaction.Verify(publicKeys) {
-		return "ERROR: Invalid transaction signature"
-	}
-
-	// Add to pending transactions
 	bs.mu.Lock()
 	bs.pendingTransactions = append(bs.pendingTransactions, txMsg.Transaction)
 	bs.mu.Unlock()
 
 	fmt.Printf("Transaction added to mempool: %s\n", txMsg.Transaction.ID())
 
-	// Start mining if not already mining
 	go bs.startMining()
 
 	return fmt.Sprintf("SUCCESS: Transaction %s added to mempool", txMsg.Transaction.ID())
@@ -143,9 +143,12 @@ func (bs *BlockchainServer) ProcessBlockMessage(blockJSON string) string {
 	fmt.Printf("Received block with %d transactions\n", len(blockMsg.Block.Transactions))
 
 	// Validate the received block
-	if !bs.validateReceivedBlock(blockMsg.Block, blockMsg.PublicKeys) {
+	if !bs.validateReceivedBlock(blockMsg.Block) {
 		return "ERROR: Block validation failed"
 	}
+
+	// Update UTXO set with the new block before adding
+	bs.updateUTXOSetWithBlock(blockMsg.Block)
 
 	// Add block to blockchain
 	bs.mu.Lock()
@@ -161,7 +164,19 @@ func (bs *BlockchainServer) ProcessBlockMessage(blockJSON string) string {
 	return fmt.Sprintf("SUCCESS: Block accepted and added to blockchain")
 }
 
-func (bs *BlockchainServer) validateReceivedBlock(block Block, publicKeyData [][]PublicKeyData) bool {
+// buildPrevTxMap construye mapa txID → *Tx recorriendo toda la blockchain actual.
+func (bs *BlockchainServer) buildPrevTxMap() map[string]*Tx {
+	prevMap := make(map[string]*Tx)
+	for _, blk := range bs.blockchain {
+		for idx := range blk.Transactions {
+			tx := &blk.Transactions[idx]
+			prevMap[tx.ID()] = tx
+		}
+	}
+	return prevMap
+}
+
+func (bs *BlockchainServer) validateReceivedBlock(block Block) bool {
 	// Check if block connects to our chain
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -191,23 +206,17 @@ func (bs *BlockchainServer) validateReceivedBlock(block Block, publicKeyData [][
 		return false
 	}
 
-	// Validate all transactions in the block
-	for i, tx := range block.Transactions {
-		if i >= len(publicKeyData) {
-			fmt.Printf("Missing public keys for transaction %d\n", i)
-			return false
-		}
+	// Prepare map of previous tx for validation, including chain so far
+	prevMap := bs.buildPrevTxMap()
 
-		publicKeys, err := bs.parsePublicKeys(publicKeyData[i])
-		if err != nil {
-			fmt.Printf("Invalid public keys for transaction %d: %v\n", i, err)
+	for i := 0; i < len(block.Transactions); i++ {
+		tx := &block.Transactions[i]
+		if !tx.Validate(prevMap) {
+			fmt.Printf("Transaction %d validation failed\n", i)
 			return false
 		}
-
-		if !tx.Verify(publicKeys) {
-			fmt.Printf("Transaction %d verification failed\n", i)
-			return false
-		}
+		// After validation add tx to map to allow intra-block spending
+		prevMap[tx.ID()] = tx
 	}
 
 	fmt.Printf("Block validation successful\n")
@@ -294,6 +303,9 @@ func (bs *BlockchainServer) startMining() {
 		bs.blockchain = append(bs.blockchain, block)
 		bs.isMining = false
 		bs.mu.Unlock()
+
+		// Update UTXO set with mined block
+		bs.updateUTXOSetWithBlock(block)
 
 		// Save to disk
 		bs.saveBlockchain()
@@ -389,4 +401,31 @@ func (bs *BlockchainServer) saveBlockchain() {
 	}
 
 	fmt.Printf("💾 Blockchain saved to disk (%d blocks)\n", len(bs.blockchain))
+}
+
+// rebuildUTXOSet reconstruye todo el conjunto UTXO recorriendo la blockchain
+func (bs *BlockchainServer) rebuildUTXOSet() {
+	bs.utxoSet = make(map[string]TxOut)
+
+	for _, block := range bs.blockchain {
+		bs.updateUTXOSetWithBlock(block)
+	}
+}
+
+// updateUTXOSetWithBlock actualiza el conjunto UTXO al aceptar un bloque
+func (bs *BlockchainServer) updateUTXOSetWithBlock(block Block) {
+	// Remove spent outputs
+	for _, tx := range block.Transactions {
+		for _, in := range tx.TxIns {
+			key := fmt.Sprintf("%x:%d", in.PrevTx, in.PrevIndex)
+			delete(bs.utxoSet, key)
+		}
+
+		// Add new outputs
+		txID := tx.ID()
+		for idx, out := range tx.TxOuts {
+			key := fmt.Sprintf("%s:%d", txID, idx)
+			bs.utxoSet[key] = out
+		}
+	}
 }

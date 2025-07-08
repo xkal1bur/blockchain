@@ -45,19 +45,15 @@ func main() {
 
 	// Connect to the server
 	fmt.Println("\n🌐 Connecting to blockchain server...")
-	conn, err := net.Dial("tcp", "192.168.107.226:8081")
+	conn, err := net.Dial("tcp", "localhost:8081")
 	if err != nil {
 		fmt.Println("Error connecting:", err)
 		return
 	}
 	defer conn.Close()
 
-	// Get the public key data from wallet
-	publicKeyData, err := wallet.GetPublicKeyData()
-	if err != nil {
-		fmt.Printf("Error getting public key data: %v\n", err)
-		return
-	}
+	// Raw public key bytes (65)
+	pubBytes := wallet.PublicKey
 
 	// Create a test transaction first (without signature)
 	tx := core.Tx{
@@ -67,13 +63,15 @@ func main() {
 				PrevTx:    []byte("prev_tx_hash_123"),
 				PrevIndex: 0,
 				Signature: []byte{}, // Will be filled after signing
+				PubKey:    pubBytes,
 				Net:       "testnet",
 			},
 		},
 		TxOuts: []core.TxOut{
 			{
-				Amount:        1000000,
-				LockingScript: []byte(wallet.GetAddressHex()), // Use wallet address
+				Amount: 1000000,
+				// Locking script es hash SHA3-256 de la clave pública del destinatario (en este demo, nos enviamos a nosotros mismos)
+				LockingScript: core.HashSHA3(pubBytes),
 			},
 		},
 	}
@@ -91,12 +89,10 @@ func main() {
 	// Add the signature to the transaction
 	tx.TxIns[0].Signature = signature
 
-	// Create the transaction message with real public key
+	// Create the transaction message (PublicKeys field deprecated, left empty)
 	txMsg := core.TransactionMessage{
 		Transaction: tx,
-		PublicKeys: []core.PublicKeyData{
-			publicKeyData, // Use real public key from wallet
-		},
+		PublicKeys:  []core.PublicKeyData{},
 	}
 
 	// Marshal to JSON
