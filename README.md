@@ -1,5 +1,29 @@
 # Blockchain Project Documentation
 
+## 🔧 Requerimientos
+
+### ✅ Funcionalidadess implementadas:
+- Generación llaves públicas/privadas y direcciones (hashear la llave pública del emisor).
+- Generación y firmas de las transacciones P2P (peer to peer).
+- Validar transacciones recibidas.
+- Minar bloques (con PoW).
+- Broadcast(propagación) de bloques y transacciones por red TCP.
+- Guardar y actualizar el estado del blockchain local.
+- Simulación local (`ab_testing.go`) y red real (`server.go`, `client.go`).
+
+### 🔐 Requerimientos de seguridad implementados:
+- Criptografía asimétrica para autenticidad mediante curva elíptica (ECDSA/secp256k1).
+- Hashing con SHA3-256 para integridad de las llaves, transacciones y bloques.
+- Verificación de firmas antes de aceptar transacciones.
+- Validación del `prev_hash` para asegurar continuidad del blockchain.
+
+### 🧱 Próximos pasos:
+- ❗ GUI o interfaz CLI para usuarios (ver llaves, balance, transacciones).
+- ❗ Validación automática al recibir transacciones/bloques al minar.
+- ❗ Reenvío entre nodos.
+
+---
+
 ## 📁 Estructura del Proyecto
 
 Este proyecto implementa una blockchain básica en Go con arquitectura modular separada en dos directorios principales:
@@ -152,6 +176,14 @@ go run client.go
 - **Archivos**: `wallet.json`, `blockchain.json`
 - **Sincronización**: Mutex para acceso concurrente
 
+---
+
+## 🔄 Workflow del sistema
+
+![Flujo TCP](Blockchain-workflow-aorus-2.jpg)
+
+---
+
 ## ⚠️ Consideraciones de Seguridad
 
 - Las claves privadas se almacenan en texto plano en JSON
@@ -170,6 +202,18 @@ Este proyecto está diseñado para demostrar:
 - Networking TCP en Go
 
 ---
+
+## 🧠 Lecciones aprendidas
+
+- La validación de firmas y modular la estructura de una transacción from scratch es desafiante.
+- Usar Go fue ideal para concurrencia/red.
+- Trabajar en red real presentó dificultades en sincronización de estados y seguridad en el funcionamiento del blockchain.
+
+## 🧑‍🤝‍🧑 Retrospectiva
+
+- ✅ Buen diseño de módulos desde el inicio facilitó la extensión del código.
+- ✅ Organización clara en ramas (`main`, `testing_tcp`) permitió separar pruebas locales y reales.
+- ❌ Hubo fricción inicial por decisiones en la criptografía para la creación de llaves (hacer todo a mano vs librerías).
 
 *Proyecto desarrollado con fines educativos para el curso de Ética y Seguridad de los Datos*
 
