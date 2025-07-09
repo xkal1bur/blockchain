@@ -121,11 +121,22 @@ func (bs *BlockchainServer) ProcessTransactionMessage(txJSON string) string {
 		return fmt.Sprintf("ERROR: Invalid transaction message JSON: %v", err)
 	}
 
-	fmt.Printf("Processing transaction: %s\n", txMsg.Transaction.ID())
+	fmt.Printf("🔍 Processing transaction: %s\n", txMsg.Transaction.ID())
+	fmt.Printf("📝 Transaction has %d inputs and %d outputs\n", len(txMsg.Transaction.TxIns), len(txMsg.Transaction.TxOuts))
+
+	// Show transaction details
+	for i, txIn := range txMsg.Transaction.TxIns {
+		fmt.Printf("   Input %d: PrevTx=%x, PrevIndex=%d\n", i, txIn.PrevTx, txIn.PrevIndex)
+	}
+	for i, txOut := range txMsg.Transaction.TxOuts {
+		fmt.Printf("   Output %d: Amount=%d, LockingScript=%s\n", i, txOut.Amount, string(txOut.LockingScript))
+	}
 
 	prevMap := bs.buildPrevTxMap()
+	fmt.Printf("📋 Previous transactions map has %d entries\n", len(prevMap))
 
 	if !txMsg.Transaction.Validate(prevMap) {
+		fmt.Printf("❌ Transaction validation failed for: %s\n", txMsg.Transaction.ID())
 		return "ERROR: Transaction validation failed"
 	}
 
@@ -133,7 +144,8 @@ func (bs *BlockchainServer) ProcessTransactionMessage(txJSON string) string {
 	bs.pendingTransactions = append(bs.pendingTransactions, txMsg.Transaction)
 	bs.mu.Unlock()
 
-	fmt.Printf("Transaction added to mempool: %s\n", txMsg.Transaction.ID())
+	fmt.Printf("✅ Transaction added to mempool: %s\n", txMsg.Transaction.ID())
+	fmt.Printf("📊 Mempool now has %d pending transactions\n", len(bs.pendingTransactions))
 
 	go bs.startMining()
 
@@ -188,53 +200,98 @@ func (bs *BlockchainServer) validateReceivedBlock(block Block) bool {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
+	fmt.Printf("🔍 Starting block validation...\n")
+	fmt.Printf("📊 Current blockchain length: %d\n", len(bs.blockchain))
+	fmt.Printf("🔗 Block PrevBlock: %x\n", block.PrevBlock)
+	fmt.Printf("📝 Block has %d transactions\n", len(block.Transactions))
+
 	if len(bs.blockchain) > 0 {
 		lastBlockHash, err := bs.blockchain[len(bs.blockchain)-1].Hash()
 		if err != nil {
-			fmt.Printf("Error getting last block hash: %v\n", err)
+			fmt.Printf("❌ Error getting last block hash: %v\n", err)
 			return false
 		}
 
+		fmt.Printf("🔗 Last block hash: %x\n", lastBlockHash)
 		if !bytes.Equal(block.PrevBlock, lastBlockHash) {
-			fmt.Printf("Block doesn't connect to our chain\n")
+			fmt.Printf("❌ Block doesn't connect to our chain\n")
+			fmt.Printf("   Expected: %x\n", lastBlockHash)
+			fmt.Printf("   Got:      %x\n", block.PrevBlock)
 			return false
 		}
+		fmt.Printf("✅ Block connects to chain correctly\n")
 	} else {
 		// Genesis block: PrevBlock should be all zeros
 		allZeros := make([]byte, 32)
+		fmt.Printf("🔗 Expected genesis PrevBlock: %x\n", allZeros)
 		if !bytes.Equal(block.PrevBlock, allZeros) {
-			fmt.Printf("Genesis block must have all-zero PrevBlock\n")
+			fmt.Printf("❌ Genesis block must have all-zero PrevBlock\n")
+			fmt.Printf("   Expected: %x\n", allZeros)
+			fmt.Printf("   Got:      %x\n", block.PrevBlock)
 			return false
 		}
-		fmt.Printf("Validating genesis block\n")
+		fmt.Printf("✅ Genesis block PrevBlock validation passed\n")
 	}
 
 	// Validate Proof of Work
+	fmt.Printf("⛏️  Validating Proof of Work...\n")
+	fmt.Printf("🎯 Block difficulty (Bits): %d\n", block.Bits)
+	fmt.Printf("🔢 Block nonce: %d\n", block.Nonce)
+
 	blockHash, err := block.Hash()
 	if err != nil {
-		fmt.Printf("Error getting block hash: %v\n", err)
+		fmt.Printf("❌ Error getting block hash: %v\n", err)
 		return false
 	}
 
+	fmt.Printf("🔑 Block hash: %x\n", blockHash)
 	if !block.isValidHash(blockHash) {
-		fmt.Printf("Invalid Proof of Work\n")
+		fmt.Printf("❌ Invalid Proof of Work\n")
+		fmt.Printf("   Hash: %x\n", blockHash)
+		fmt.Printf("   Required leading zero bits: %d\n", block.Bits)
+		// Count actual leading zero bits
+		count := 0
+		for _, b := range blockHash {
+			if b == 0 {
+				count += 8
+			} else {
+				for i := 7; i >= 0; i-- {
+					if (b>>i)&1 == 0 {
+						count++
+					} else {
+						break
+					}
+				}
+				break
+			}
+		}
+		fmt.Printf("   Actual leading zero bits: %d\n", count)
 		return false
 	}
+	fmt.Printf("✅ Proof of Work validation passed\n")
 
 	// Prepare map of previous tx for validation, including chain so far
+	fmt.Printf("🗂️  Building previous transactions map...\n")
 	prevMap := bs.buildPrevTxMap()
+	fmt.Printf("📋 Previous transactions map has %d entries\n", len(prevMap))
 
+	fmt.Printf("🔍 Validating %d transactions...\n", len(block.Transactions))
 	for i := 0; i < len(block.Transactions); i++ {
 		tx := &block.Transactions[i]
+		fmt.Printf("📝 Validating transaction %d: %s\n", i, tx.ID())
+		fmt.Printf("   Transaction has %d inputs and %d outputs\n", len(tx.TxIns), len(tx.TxOuts))
+
 		if !tx.Validate(prevMap) {
-			fmt.Printf("Transaction %d validation failed\n", i)
+			fmt.Printf("❌ Transaction %d validation failed: %s\n", i, tx.ID())
 			return false
 		}
+		fmt.Printf("✅ Transaction %d validation passed\n", i)
+
 		// After validation add tx to map to allow intra-block spending
 		prevMap[tx.ID()] = tx
 	}
 
-	fmt.Printf("Block validation successful\n")
+	fmt.Printf("✅ Block validation successful\n")
 	return true
 }
 

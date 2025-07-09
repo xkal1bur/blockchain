@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -12,6 +13,7 @@ import (
 // walllets to send:
 // ar: c8c3a919c9ca981291263d9ccdc2b04e9432bbf57ff0a84dcd53c7b74fc79aa7
 // an: e4cf9ec444babdf51e5783162ba14efb5210447f40f5d842ab23c945c7dfc643
+// current wallet will be added dynamically
 
 func main() {
 	// 1) Cargar o crear wallet local
@@ -35,15 +37,26 @@ func main() {
 	fmt.Println("⚙️  Creando bloque génesis para el wallet…")
 	amountGenesis := uint64(1_000_000)
 
-	targets := []string{"c8c3a919c9ca981291263d9ccdc2b04e9432bbf57ff0a84dcd53c7b74fc79aa7", "e4cf9ec444babdf51e5783162ba14efb5210447f40f5d842ab23c945c7dfc643"}
+	// Include the current wallet address along with other target addresses
+	targets := []string{
+		"c8c3a919c9ca981291263d9ccdc2b04e9432bbf57ff0a84dcd53c7b74fc79aa7",
+		"e4cf9ec444babdf51e5783162ba14efb5210447f40f5d842ab23c945c7dfc643",
+		wallet.Address, // Add current wallet address
+	}
 
 	// Única coinbase con 3 salidas por destino
 	var outputs []core.TxOut
 	for _, addr := range targets {
 		for i := 0; i < 3; i++ {
+			// Decode hex address to bytes for locking script
+			addrBytes, err := hex.DecodeString(addr)
+			if err != nil {
+				fmt.Printf("Error decoding address %s: %v\n", addr, err)
+				continue
+			}
 			outputs = append(outputs, core.TxOut{
 				Amount:        amountGenesis,
-				LockingScript: []byte(addr),
+				LockingScript: addrBytes,
 			})
 		}
 	}

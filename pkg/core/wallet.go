@@ -2,7 +2,6 @@ package core
 
 import (
 	"bytes"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -38,20 +37,22 @@ type WalletData struct {
 
 // NewWallet creates a new wallet with generated keys
 func NewWallet() (*Wallet, error) {
-	// Generate ECDH P-256 key pair
-	curve := ecdh.P256()
-	privateKey, err := curve.GenerateKey(rand.Reader)
+	// Generate ECDSA P-256 key pair directly
+	privateKey, err := ecdsa.GenerateKey(StandardCurve, rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate private key: %v", err)
 	}
 
-	publicKey := privateKey.PublicKey()
+	// Convert to uncompressed format (0x04 + 32 bytes X + 32 bytes Y)
+	publicKeyBytes := make([]byte, 65)
+	publicKeyBytes[0] = 0x04
+	copy(publicKeyBytes[1:33], privateKey.PublicKey.X.Bytes())
+	copy(publicKeyBytes[33:65], privateKey.PublicKey.Y.Bytes())
 
-	// Get the raw bytes
-	privateKeyBytes := privateKey.Bytes()
-	publicKeyBytes := publicKey.Bytes()
+	// Private key as bytes (32 bytes)
+	privateKeyBytes := privateKey.D.Bytes()
 
-	// Generate address from public key (simplified - using SHA256 hash)
+	// Generate address from public key
 	address := generateAddress(publicKeyBytes)
 
 	wallet := &Wallet{
@@ -215,22 +216,16 @@ func (w *Wallet) DisplayWalletInfo() {
 
 // GetECDSAPrivateKey returns the wallet's private key as an ECDSA private key
 func (w *Wallet) GetECDSAPrivateKey() (*ecdsa.PrivateKey, error) {
-	// For ECDSA, we need to convert from ECDH format
-	// This is a simplified approach - in production you'd store the key in ECDSA format directly
-	curve := ecdh.P256()
-	ecdhPrivateKey, err := curve.NewPrivateKey(w.PrivateKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create ECDH private key: %v", err)
-	}
-
-	// Get the raw private key bytes and create ECDSA private key
-	// This is a workaround since we can't directly convert ECDH to ECDSA
+	// Convert private key bytes to big.Int
 	privateKeyInt := new(big.Int).SetBytes(w.PrivateKey)
 
-	// Extract X and Y coordinates from ECDH public key
-	pubKeyBytes := ecdhPrivateKey.PublicKey().Bytes()
-	x := new(big.Int).SetBytes(pubKeyBytes[1:33]) // Skip first byte (0x04)
-	y := new(big.Int).SetBytes(pubKeyBytes[33:])  // Y coordinate
+	// Extract X and Y coordinates from uncompressed public key
+	if len(w.PublicKey) != 65 || w.PublicKey[0] != 0x04 {
+		return nil, fmt.Errorf("invalid public key format")
+	}
+
+	x := new(big.Int).SetBytes(w.PublicKey[1:33])
+	y := new(big.Int).SetBytes(w.PublicKey[33:65])
 
 	ecdsaPrivateKey := &ecdsa.PrivateKey{
 		PublicKey: ecdsa.PublicKey{
@@ -266,9 +261,10 @@ func (w *Wallet) GetPublicKeyData() (PublicKeyData, error) {
 	}, nil
 }
 
-// GetLockingScript returns the wallet's locking script (SHA3-256 of its public key)
+// GetLockingScript returns the wallet's locking script (address as hex-decoded bytes)
 func (w *Wallet) GetLockingScript() []byte {
-	return []byte(w.Address)
+	addressBytes, _ := hex.DecodeString(w.Address)
+	return addressBytes
 }
 
 // FindSpendableUTXOs selects UTXOs from utxoSet belonging to this wallet until amount is reached
@@ -276,7 +272,7 @@ func (w *Wallet) GetLockingScript() []byte {
 func (w *Wallet) FindSpendableUTXOs(utxoSet map[string]TxOut, amount uint64) ([]string, uint64, error) {
 	var selected []string
 	var total uint64
-	script := []byte(w.Address)
+	script := w.GetLockingScript() // Now returns hex-decoded bytes
 
 	for key, out := range utxoSet {
 		if bytes.Equal(out.LockingScript, script) {
@@ -329,9 +325,10 @@ func (w *Wallet) BuildTransaction(destPubKey []byte, amount uint64, utxoSet map[
 	}
 
 	// Outputs: recipient + change (if any)
+	destAddressBytes := HashSHA3(destPubKey) // Hash of destination public key
 	tx.TxOuts = append(tx.TxOuts, TxOut{
 		Amount:        amount,
-		LockingScript: []byte(hex.EncodeToString(HashSHA3(destPubKey))),
+		LockingScript: destAddressBytes,
 	})
 
 	change := totalIn - amount
@@ -384,7 +381,8 @@ func (w *Wallet) BuildTransactionToAddress(destAddress string, amount uint64, ut
 	}
 
 	// outputs: destination + change
-	tx.TxOuts = append(tx.TxOuts, TxOut{Amount: amount, LockingScript: []byte(destAddress)})
+	destAddressBytes, _ := hex.DecodeString(destAddress) // Decode hex address to bytes
+	tx.TxOuts = append(tx.TxOuts, TxOut{Amount: amount, LockingScript: destAddressBytes})
 	change := totalIn - amount
 	if change > 0 {
 		tx.TxOuts = append(tx.TxOuts, TxOut{Amount: change, LockingScript: w.GetLockingScript()})
@@ -405,7 +403,7 @@ func (w *Wallet) BuildTransactionToAddress(destAddress string, amount uint64, ut
 // FilterUTXOs returns a subset of utxoSet that belong to this wallet
 func (w *Wallet) FilterUTXOs(utxoSet map[string]TxOut) map[string]TxOut {
 	res := make(map[string]TxOut)
-	script := []byte(w.Address)
+	script := w.GetLockingScript() // Now returns hex-decoded bytes
 	for k, v := range utxoSet {
 		if bytes.Equal(v.LockingScript, script) {
 			res[k] = v

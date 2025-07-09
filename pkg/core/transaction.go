@@ -118,10 +118,12 @@ func (tx *Tx) Validate(prevTxs map[string]*Tx) bool {
 		}
 		prevOut := prevTx.TxOuts[txin.PrevIndex]
 
-		// 3. Comparar dirección derivada (hex del hash) con LockingScript
-		addr := hex.EncodeToString(HashSHA3(txin.PubKey))
-		if string(prevOut.LockingScript) != addr {
+		// 3. Comparar dirección derivada (hash bytes) con LockingScript
+		addrBytes := HashSHA3(txin.PubKey)
+		if !bytes.Equal(prevOut.LockingScript, addrBytes) {
 			fmt.Printf("❌ El locking script no coincide con la dirección derivada\n")
+			fmt.Printf("   Expected: %x\n", addrBytes)
+			fmt.Printf("   Got:      %x\n", prevOut.LockingScript)
 			return false
 		}
 
